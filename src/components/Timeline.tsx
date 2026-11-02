@@ -40,21 +40,27 @@ export function Timeline() {
     editor.select(layerId)
     const layer = scene.layers.find(l => l.id === layerId)
     if (!layer) return
-    setDragBar({ id: layerId, mode, startX: e.clientX, origStart: layer.start ?? 0, origEnd: layer.end ?? duration })
+    // 这里必须用 mousedown 时算好的局部常量。
+    // 之前读的是 dragBar 状态，但此刻 setDragBar 还没提交，闭包里拿到的永远是 null，
+    // 于是退化成 origStart=0 / origEnd=duration —— 拖右手柄会把 end 直接吸到片尾。
+    const origStart = layer.start ?? 0
+    const origEnd = layer.end ?? duration
+    setDragBar({ id: layerId, mode, startX: e.clientX, origStart, origEnd })
     const el = trackRef.current!
     const rect = el.getBoundingClientRect()
+    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
     const move = (ev: MouseEvent) => {
       const dt = ((ev.clientX - e.clientX) / rect.width) * duration
-      let s = dragBar?.origStart ?? layer.start ?? 0
-      let en = dragBar?.origEnd ?? layer.end ?? duration
+      let s = origStart
+      let en = origEnd
       if (mode === 'move') {
-        const len = en - s
-        s = Math.max(0, Math.min(duration - len, (dragBar?.origStart ?? 0) + dt))
+        const len = origEnd - origStart
+        s = clamp(origStart + dt, 0, Math.max(0, duration - len))
         en = s + len
       } else if (mode === 'l') {
-        s = Math.max(0, Math.min(en - 0.2, (dragBar?.origStart ?? 0) + dt))
+        s = clamp(origStart + dt, 0, origEnd - 0.2)
       } else {
-        en = Math.min(duration, Math.max(s + 0.2, (dragBar?.origEnd ?? duration) + dt))
+        en = clamp(origEnd + dt, origStart + 0.2, duration)
       }
       editor.updateLayer(layerId, { start: round(s), end: round(en) }, { label: '调整图层时间' })
     }

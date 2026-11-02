@@ -139,6 +139,9 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle('gewu:new-session', async () => { await deps.bridge.newSession() })
 
   ipcMain.handle('gewu:choose-export-path', async (_e, req: ExportRequest) => {
+    // 调试/自动化：--export-path=<file> 时跳过系统保存框，直接返回该路径
+    const forced = process.argv.find(a => a.startsWith('--export-path='))
+    if (forced) return { ok: true, outPath: forced.slice('--export-path='.length) }
     const win = deps.getWindow()
     const result = await dialog.showSaveDialog(win!, {
       title: '导出视频',

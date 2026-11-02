@@ -18,7 +18,6 @@ export function Stage({ onToast, exportJob }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<SceneRenderer | null>(null)
-  const rafRef = useRef<number>(0)
   const lastTs = useRef<number>(0)
   const timeRef = useRef(time)
   timeRef.current = time
@@ -38,28 +37,43 @@ export function Stage({ onToast, exportJob }: Props) {
     blitTo(c, r.element)
   }, [scene])
 
+  // 给播放循环用的稳定引用（避免把变化的函数塞进 effect 依赖）
+  const renderNowRef = useRef(renderNow)
+  renderNowRef.current = renderNow
+  const editorRef = useRef(editor)
+  editorRef.current = editor
+  const durationRef = useRef(scene.canvas.duration)
+  durationRef.current = scene.canvas.duration
+
   // 播放循环
+  // 只依赖 playing：editor / scene / renderNow 每帧都会变，若放进依赖数组，
+  // 这个 effect 会每帧被拆掉重建，lastTs 跟着重置，dt 永远只量到一小段，
+  // 结果就是「点了播放几乎不动」。所以统一走 ref。
   useEffect(() => {
     if (!playing) {
-      renderNow()
+      renderNowRef.current()
       return
     }
+    let cur = timeRef.current
+    let lastSet = cur
+    let raf = 0
     lastTs.current = performance.now()
     const tick = (now: number) => {
-      const dt = (now - lastTs.current) / 1000
+      // 单帧最多推进 0.25s：卡顿或窗口失焦回来后不要一下跳很远
+      const dt = Math.min(0.25, Math.max(0, (now - lastTs.current) / 1000))
       lastTs.current = now
-      const next = timeRef.current + dt
-      if (next >= scene.canvas.duration) {
-        editor.setTime(0)
-      } else {
-        editor.setTime(next)
-      }
-      renderNow()
-      rafRef.current = requestAnimationFrame(tick)
+      // 播放中用户拖动播放头 → 以外部值为准
+      if (Math.abs(timeRef.current - lastSet) > 0.001) cur = timeRef.current
+      cur += dt
+      if (cur >= durationRef.current) cur = 0
+      lastSet = cur
+      editorRef.current.setTime(cur)
+      renderNowRef.current()
+      raf = requestAnimationFrame(tick)
     }
-    rafRef.current = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [playing, editor, renderNow, scene.canvas.duration])
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [playing])
 
   // 场景/时间变化时重绘（非播放状态）
   useEffect(() => {
