@@ -21,6 +21,7 @@ export function LeftPanel({ onToast }: Props) {
   const [assets, setAssets] = useState<{ name: string; path: string; size: number }[]>([])
   const [ttsVoices, setTtsVoices] = useState<{ name: string; culture: string }[]>([])
   const [ttsVoice, setTtsVoice] = useState('')
+  const [ttsRate, setTtsRate] = useState(0)
   const [ttsBusy, setTtsBusy] = useState(false)
   const editor = useEditor()
   const fileRef = useRef<HTMLInputElement>(null)
@@ -115,7 +116,7 @@ export function LeftPanel({ onToast }: Props) {
   /** 把一条字幕念出来，结果作为音轨挂到它的开始时刻 */
   async function dubOne(sub: { id: string; text: string; start: number; end: number }): Promise<boolean> {
     if (!sub.text.trim()) return false
-    const res = await window.gewu.tts({ text: sub.text, name: `tts-${sub.id}`, voice: ttsVoice || undefined })
+    const res = await window.gewu.tts({ text: sub.text, name: `tts-${sub.id}`, voice: ttsVoice || undefined, rate: ttsRate })
     if (!res.ok || !res.path) {
       onToast({ text: res.error ?? '配音失败', kind: 'err' })
       return false
@@ -311,6 +312,17 @@ export function LeftPanel({ onToast }: Props) {
                 </select>
               )}
               {ttsVoices.length === 1 && <span className="tiny muted">{ttsVoices[0].name.replace('Microsoft ', '').replace(' Desktop', '')}</span>}
+              <select
+                className="tts-rate"
+                value={ttsRate}
+                onChange={e => setTtsRate(Number(e.target.value))}
+                title="语速：字幕条数多、总时长紧的时候调快一点"
+              >
+                <option value={-3}>0.8×</option>
+                <option value={0}>1.0×</option>
+                <option value={3}>1.3×</option>
+                <option value={6}>1.6×</option>
+              </select>
             </div>
             {editor.state.scene.subtitles.length === 0 && (
               <div className="lp-empty">还没有字幕。把播放头停在要说话的位置，点上面的按钮。</div>

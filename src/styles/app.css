@@ -295,6 +295,13 @@
   background: var(--bg-1); color: var(--fg-2);
   font-size: 11px; font-family: inherit;
 }
+.tts-rate {
+  flex: none; width: 62px;
+  padding: 3px 4px;
+  border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg-1); color: var(--fg-2);
+  font-size: 11px; font-family: inherit;
+}
 
 .lp-foot {
   flex: none;

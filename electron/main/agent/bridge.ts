@@ -8,6 +8,19 @@ import { synthesize } from '../tts'
 import type { AgentStatus, ChatMessage, ScenePatch, ToolInvocation, ToolResult } from '@shared/ipc'
 import type { Scene } from '@shared/scene'
 
+/**
+ * ACP 把上游模型的报错层层包了一层壳（「DSH session/prompt 失败：Internal error: turn failed: …」），
+ * 真正的信息在后面。剥掉前缀，让用户一眼看到该干什么。
+ */
+function humanizeAgentError(detail: string): string {
+  const cleaned = detail
+    .replace(/^DSH\s+session\/prompt\s*失败[：:]\s*/, '')
+    .replace(/^Internal error:\s*turn failed:\s*/i, '')
+    .replace(/^DSH\s+\S+\s*失败[：:]\s*/, '')
+    .trim()
+  return cleaned || detail
+}
+
 export interface BridgeOptions {
   runtimeRoot: string
   dataRoot: string
@@ -188,8 +201,10 @@ export class AgentBridge {
       this.setStatus({ phase: 'ready', sessionId: this.sessionId })
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      this.o.onChat({ id: assistantId, role: 'assistant', text: detail, at: Date.now(), error: true, tools: this.toolsFor(assistantId) })
-      this.setStatus({ phase: 'error', detail, sessionId: this.sessionId })
+      this.o.log('bridge', `prompt failed: ${detail}`)
+      const human = humanizeAgentError(detail)
+      this.o.onChat({ id: assistantId, role: 'assistant', text: human, at: Date.now(), error: true, tools: this.toolsFor(assistantId) })
+      this.setStatus({ phase: 'error', detail: human, sessionId: this.sessionId })
     } finally {
       this.busy = false
     }

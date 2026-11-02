@@ -210,6 +210,48 @@ const server = createServer(async (req, res) => {
   const toolMsgs = messages.filter(m => m.role === 'tool')
   console.log('[mock] request model=%s msgs=%d tools=%d toolResults=%d', payload.model, messages.length, (payload.tools ?? []).length, toolMsgs.length)
 
+  /**
+   * reject400：假装是「不认 stream_options」的中转站——带这个字段就 400。
+   * 用来验证主进程 model-proxy 的「退一步重试」路径。
+   */
+  if (MODE === 'reject400' && payload.stream_options) {
+    console.log('[mock] reject400: 收到 stream_options，回 400')
+    res.writeHead(400, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: { message: 'Unsupported parameter: stream_options', type: 'invalid_request_error' } }))
+    return
+  }
+
+  /** auth401：Key 不对时用户会看到什么 */
+  if (MODE === 'auth401') {
+    res.writeHead(401, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: { message: 'Authentication Fails, Your api key is invalid', type: 'authentication_error' } }))
+    return
+  }
+
+  /**
+   * nostream：假装是「不认 stream:true」的中转站——直接回一整块 JSON。
+   * 用来验证主进程 model-proxy 的 toChunks 兜底路径。
+   */
+  if (MODE === 'nostream') {
+    const message = toolMsgs.length === 0
+      ? {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call_ns1', type: 'function', function: { name: 'scene_inspect', arguments: '{}' } }]
+        }
+      : { role: 'assistant', content: '非流式响应也能跑通，工具结果已收到。' }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({
+      id: 'chatcmpl-nostream',
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: payload.model ?? 'mock',
+      choices: [{ index: 0, message, finish_reason: message.tool_calls ? 'tool_calls' : 'stop' }],
+      usage: { prompt_tokens: 120, completion_tokens: 15, total_tokens: 135 }
+    }))
+    return
+  }
+
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
   if (process.env.MOCK_DUMP) {
     const { writeFileSync } = await import('node:fs')
@@ -222,8 +264,7 @@ const server = createServer(async (req, res) => {
   const nextCall = MODE === 'scene'
     ? sceneTurn(toolMsgs.length)
     : MODE === 'kf'
-      ? keyframeTurn(toolMsgs.length)
-      : MODE === 'tts'
+      ? keyframeTurn(toolMsgs.length)      : MODE === 'tts'
         ? ttsTurn(toolMsgs.length, toolMsgs)
         : (MODE !== 'text' && toolMsgs.length === 0 ? (CALLS[MODE] ?? CALLS.inspect) : null)
   if (nextCall) {

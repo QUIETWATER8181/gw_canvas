@@ -6,7 +6,24 @@ const MAX_FRAME_BYTES = 4 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 30_000
 
 type Pending = { method: string; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
-type AcpFrame = { jsonrpc: '2.0'; id?: number; method?: string; params?: unknown; result?: unknown; error?: { message?: string } }
+type AcpFrame = { jsonrpc: '2.0'; id?: number; method?: string; params?: unknown; result?: unknown; error?: AcpError }
+type AcpError = { message?: string; code?: number; data?: unknown }
+
+/**
+ * ACP 的错误帧里 `message` 往往只有一句「internal error」，真正有用的信息
+ * 在 `data` 里（比如上游模型返回的 401 文本）。全都摊平给人看。
+ */
+function describeAcpError(error: AcpError | undefined): string {
+  if (!error) return ''
+  const parts: string[] = []
+  if (typeof error.message === 'string' && error.message.trim()) parts.push(error.message.trim())
+  if (error.data !== undefined && error.data !== null) {
+    const raw = typeof error.data === 'string' ? error.data : JSON.stringify(error.data)
+    if (raw && raw !== '{}' && !parts.some(p => p.includes(raw))) parts.push(raw.slice(0, 800))
+  }
+  if (!parts.length && typeof error.code === 'number') parts.push(`错误码 ${error.code}`)
+  return parts.length ? `：${parts.join(' | ')}` : ''
+}
 
 export interface DshProcessOptions {
   runtimeRoot: string
@@ -181,7 +198,7 @@ export class DshProcess {
         const pending = this.pending.get(frame.id)!
         this.pending.delete(frame.id)
         clearTimeout(pending.timer)
-        if (frame.error) pending.reject(new Error(`DSH ${pending.method} 失败${this.stderr ? `：${this.stderr.slice(-1500)}` : ''}`))
+        if (frame.error) pending.reject(new Error(`DSH ${pending.method} 失败${describeAcpError(frame.error)}${this.stderr ? `：${this.stderr.slice(-1500)}` : ''}`))
         else pending.resolve(frame.result)
       } else if (frame.method === 'session/update') {
         this.options.onUpdate?.(frame.params)
