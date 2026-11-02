@@ -164,6 +164,7 @@ const KEYFRAME_SCENE = {
 
 const CALLS = {
   inspect: { name: 'scene_inspect', args: {} },
+  check: { name: 'check_scene', args: { samples: 9 } },
   frame: { name: 'scene_render_frame', args: { t: 5 } },
   bad: { name: 'scene_write', args: { scene: BAD_SCENE } },
   empty: { name: 'scene_write', args: { scene: { version: 1, meta: { title: '空场景' } } } },
@@ -290,6 +291,11 @@ const server = createServer(async (req, res) => {
     const last = toolMsgs[toolMsgs.length - 1]
     const content = typeof last.content === 'string' ? last.content : JSON.stringify(last.content)
     console.log('[mock] tool result #%d (%d chars):\n%s', toolMsgs.length, content.length, content.slice(0, 1600))
+    // 直接落盘：Windows 上 stdout 重定向到文件时被强杀会丢缓冲，调试时不可靠
+    if (process.env.MOCK_LOG_RESULT) {
+      const { appendFileSync } = await import('node:fs')
+      appendFileSync(process.env.MOCK_LOG_RESULT, `\n===== tool result #${toolMsgs.length} =====\n${content}\n`, 'utf8')
+    }
     text = '工具已执行完毕，我看到了返回结果。'
   }
   if (MODE === 'slow') {

@@ -14,6 +14,28 @@ export interface CompileResult {
 
 const cache = new Map<string, CompileResult>()
 
+/** 图层作用域里预置的变量名。用它们当局部变量会报「已经声明过」。 */
+export const RESERVED_NAMES = [
+  'ctx', 't', 'p', 'duration', 'width', 'height', 'cx', 'cy',
+  'theme', 'ease', 'util', 'g', 'asset', 'three'
+] as const
+
+/**
+ * 把 V8 的「Identifier 'x' has already been declared」翻译成人话。
+ * `p` / `t` 这种单字母名最容易撞车，而报错原文完全看不出是「你撞了内置变量」。
+ */
+function explainCompileError(message: string): string {
+  const dup = message.match(/Identifier '([^']+)' has already been declared/)
+  if (dup) {
+    const name = dup[1]
+    const reserved = (RESERVED_NAMES as readonly string[]).includes(name)
+    return reserved
+      ? `变量名 ${name} 是图层内置变量（可用：${RESERVED_NAMES.join(' / ')}），换个名字，比如 ${name}2 或 ${name}os`
+      : `${message}（同一段代码里重复声明了 ${name}）`
+  }
+  return message
+}
+
 /**
  * 编译图层绘制代码。代码以函数体形式执行，可用变量见 LayerScope：
  * ctx, t, p, duration, width, height, cx, cy, theme, ease, util, g, asset
@@ -35,7 +57,7 @@ ${layer.draw}
     ) as (scope: DrawScope) => void
     result = { draw: fn, error: null }
   } catch (error) {
-    result = { draw: null, error: error instanceof Error ? error.message : String(error) }
+    result = { draw: null, error: explainCompileError(error instanceof Error ? error.message : String(error)) }
   }
   cache.set(key, result)
   if (cache.size > 200) {

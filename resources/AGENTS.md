@@ -170,6 +170,10 @@ three.render(s)                                                // 必须最后�
 6. 文字用 `g.text`，中文默认字体已配好；公式用 `g.math`，不要用普通文字硬凑上下标。
 7. 单层代码控制在 80 行以内；复杂场景拆成多层。
 8. 不要删改用户已有的图层，除非用户明确要求；新增内容优先加新图层。
+9. **别用内置变量名当局部变量**。这些名字已经在作用域里声明过了：
+   `ctx t p duration width height cx cy theme ease util g asset three`。
+   写 `const p = ...` 会直接报 `Identifier 'p' has already been declared`，整层什么都不画。
+   坐标点用 `p0` / `pt` / `pos` / `a`，别用 `p`。
 
 ## 每轮消息附带的上下文
 

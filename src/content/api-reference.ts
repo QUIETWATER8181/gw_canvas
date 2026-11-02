@@ -9,6 +9,10 @@ util     clamp lerp map rad(角度→弧度) deg(弧度→角度) rand(seed) wav
 g        绘图工具（见下）
 asset(name)  资源 URL，如 asset('assets/foo.png')
 
+// 注意：上面这些名字（ctx t p duration width height cx cy theme ease util g asset three）
+// 已经在作用域里了，别再用 const/let 声明一遍，否则整层报
+// "Identifier 'p' has already been declared" 并且什么都不画。坐标点用 p0 / pt / pos。
+
 // 绘图工具
 g.clear(color?)                     清屏
 g.rect(x,y,w,h,{fill,stroke,width,dash,alpha,shadow,shadowBlur})
