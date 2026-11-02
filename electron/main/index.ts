@@ -256,9 +256,18 @@ app.whenReady().then(async () => {
   const probeFileArg = process.argv.find(a => a.startsWith('--probe-file='))
   const probeArg = process.argv.find(a => a.startsWith('--probe='))
   if (probeArg || probeFileArg) {
-    const js = probeFileArg
-      ? await readFile(probeFileArg.slice('--probe-file='.length), 'utf8')
-      : probeArg!.slice('--probe='.length)
+    // 探针文件读不到时要立刻报错退出，否则就是「窗口开着、什么都不发生」，
+    // 自动化脚本会一直等下去（曾经白等 4 分钟）。
+    let js: string
+    try {
+      js = probeFileArg
+        ? await readFile(probeFileArg.slice('--probe-file='.length), 'utf8')
+        : probeArg!.slice('--probe='.length)
+    } catch (error) {
+      console.error('[probe] 读不到探针文件：' + (error instanceof Error ? error.message : String(error)))
+      app.exit(2)
+      return
+    }
     const clickArg = process.argv.find(a => a.startsWith('--probe-click='))
     const waitArg = process.argv.find(a => a.startsWith('--probe-wait='))
     const wait = waitArg ? Number(waitArg.slice('--probe-wait='.length)) : 1500

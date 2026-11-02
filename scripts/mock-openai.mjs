@@ -190,7 +190,7 @@ const server = createServer(async (req, res) => {
       ...base,
       choices: [{
         index: 0,
-        delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: nextCall.name, arguments: JSON.stringify(nextCall.args) } }] },
+        delta: { tool_calls: [{ index: 0, id: 'call_' + (toolMsgs.length + 1), type: 'function', function: { name: nextCall.name, arguments: JSON.stringify(nextCall.args) } }] },
         finish_reason: null
       }]
     })

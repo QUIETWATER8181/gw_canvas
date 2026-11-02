@@ -78,7 +78,10 @@ function prettyTool(title: string): string {
     scene_add_layer: '新增图层',
     scene_delete_layer: '删除图层',
     scene_render_frame: '渲染预览帧',
+    check_scene: '检查场景',
     scene_export_video: '导出视频',
+    image_inspect: '看图',
+    image_compare: '比对两张图',
     asset_import: '导入素材',
     ask_user: '向你提问'
   }

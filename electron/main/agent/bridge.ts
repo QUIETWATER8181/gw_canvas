@@ -259,8 +259,12 @@ export class AgentBridge {
     } else if (kind === 'agent_thought_chunk') {
       // 思考内容不进对话流，避免干扰
     } else if (kind === 'tool_call' || kind === 'tool_call_update') {
+      if (process.env.GEWU_DUMP_TOOLCALL) this.o.log('tool', `RAW ${JSON.stringify(update).slice(0, 500)}`)
       const callId = String(update.toolCallId ?? update.tool_call_id ?? '')
-      const title = String(update.title ?? update.kind ?? '工具调用')
+      // tool_call_update 往往只带 status，没有 title。以前这里会退化成「工具调用」，
+      // 然后又把已有的 scene_write 覆盖掉，界面上就永远显示「工具调用」。
+      const explicitTitle = typeof update.title === 'string' && update.title ? update.title : ''
+      const title = explicitTitle || '工具调用'
       const statusRaw = String(update.status ?? '')
       const status = statusRaw === 'completed' ? 'done' : statusRaw === 'failed' ? 'error' : statusRaw === 'pending' ? 'pending' : 'running'
       const existing = this.toolCalls.get(callId)
@@ -273,7 +277,7 @@ export class AgentBridge {
           tools: this.toolsFor(msgId)
         })
       } else {
-        existing.call.title = title || existing.call.title
+        if (explicitTitle) existing.call.title = explicitTitle
         existing.call.status = status
         this.o.onChat({
           id: existing.msgId, role: 'assistant', text: this.assistantBuffer, at: Date.now(),
