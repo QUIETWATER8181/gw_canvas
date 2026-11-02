@@ -40,7 +40,14 @@ export class AgentBridge {
   private busy = false
   private startPromise: Promise<void> | null = null
   private assistantBuffer = ''
+  private assistantId: string | null = null
   private toolCalls = new Map<string, { msgId: string; call: NonNullable<ChatMessage['tools']>[number] }>()
+
+  /** 本轮某条 assistant 消息已经跑过的工具（文字分片回传时要带上，否则工具条会消失） */
+  private toolsFor(msgId: string): NonNullable<ChatMessage['tools']> | undefined {
+    const list = [...this.toolCalls.values()].filter(v => v.msgId === msgId).map(v => v.call)
+    return list.length ? list : undefined
+  }
   private lastUserText = ''
 
   constructor(private readonly o: BridgeOptions) {}
@@ -162,7 +169,7 @@ export class AgentBridge {
     this.chat({ role: 'user', text })
     const assistantId = this.chat({ role: 'assistant', text: '' })
     this.assistantBuffer = ''
-    ;(this as unknown as { assistantId: string }).assistantId = assistantId
+    this.assistantId = assistantId
 
     try {
       const result = await this.dsh.request('session/prompt', {
@@ -171,12 +178,16 @@ export class AgentBridge {
       }, 30 * 60_000) as { stopReason?: string }
       this.o.log('bridge', `prompt finished: ${result?.stopReason ?? 'unknown'}`)
       if (this.assistantBuffer.trim().length === 0) {
-        this.o.onChat({ id: assistantId, role: 'assistant', text: '（本轮没有文字输出，可能只执行了工具）', at: Date.now() })
+        this.o.onChat({
+          id: assistantId, role: 'assistant', at: Date.now(),
+          text: '（本轮没有文字输出，可能只执行了工具）',
+          tools: this.toolsFor(assistantId)
+        })
       }
       this.setStatus({ phase: 'ready', sessionId: this.sessionId })
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      this.o.onChat({ id: assistantId, role: 'assistant', text: detail, at: Date.now(), error: true })
+      this.o.onChat({ id: assistantId, role: 'assistant', text: detail, at: Date.now(), error: true, tools: this.toolsFor(assistantId) })
       this.setStatus({ phase: 'error', detail, sessionId: this.sessionId })
     } finally {
       this.busy = false
@@ -237,8 +248,13 @@ export class AgentBridge {
       const content = update.content as { type?: string; text?: string } | undefined
       if (content?.type === 'text' && content.text) {
         this.assistantBuffer += content.text
-        const id = (this as unknown as { assistantId?: string }).assistantId
-        if (id) this.o.onChat({ id, role: 'assistant', text: this.assistantBuffer, at: Date.now() })
+        const id = this.assistantId
+        if (id) {
+          this.o.onChat({
+            id, role: 'assistant', text: this.assistantBuffer, at: Date.now(),
+            tools: this.toolsFor(id)
+          })
+        }
       }
     } else if (kind === 'agent_thought_chunk') {
       // 思考内容不进对话流，避免干扰
@@ -249,19 +265,19 @@ export class AgentBridge {
       const status = statusRaw === 'completed' ? 'done' : statusRaw === 'failed' ? 'error' : statusRaw === 'pending' ? 'pending' : 'running'
       const existing = this.toolCalls.get(callId)
       if (!existing) {
-        const msgId = (this as unknown as { assistantId?: string }).assistantId ?? randomUUID()
+        const msgId = this.assistantId ?? randomUUID()
         const call = { id: callId || randomUUID(), title, status } as NonNullable<ChatMessage['tools']>[number]
         this.toolCalls.set(callId, { msgId, call })
         this.o.onChat({
           id: msgId, role: 'assistant', text: this.assistantBuffer, at: Date.now(),
-          tools: [...this.toolCalls.values()].map(v => v.call)
+          tools: this.toolsFor(msgId)
         })
       } else {
         existing.call.title = title || existing.call.title
         existing.call.status = status
         this.o.onChat({
           id: existing.msgId, role: 'assistant', text: this.assistantBuffer, at: Date.now(),
-          tools: [...this.toolCalls.values()].map(v => v.call)
+          tools: this.toolsFor(existing.msgId)
         })
       }
     }

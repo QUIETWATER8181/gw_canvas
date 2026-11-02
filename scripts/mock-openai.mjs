@@ -208,6 +208,19 @@ const server = createServer(async (req, res) => {
     console.log('[mock] tool result #%d (%d chars):\n%s', toolMsgs.length, content.length, content.slice(0, 1600))
     text = '工具已执行完毕，我看到了返回结果。'
   }
+  if (MODE === 'slow') {
+    // 慢慢吐字，用来测「停止」按钮：每 400ms 一个片段，共 150 段（约 60 秒）
+    sse(res, { ...base, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
+    for (let i = 0; i < 150; i++) {
+      if (res.writableEnded || res.destroyed) { console.log('[mock] client aborted at chunk %d', i); return }
+      sse(res, { ...base, choices: [{ index: 0, delta: { content: `第${i}段。` }, finish_reason: null }] })
+      await new Promise(r => setTimeout(r, 400))
+    }
+    sse(res, { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+    res.write('data: [DONE]\n\n')
+    res.end()
+    return
+  }
   sse(res, { ...base, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
   for (const piece of text.match(/[\s\S]{1,8}/g) ?? []) {
     sse(res, { ...base, choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] })
