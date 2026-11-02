@@ -271,6 +271,22 @@
 }
 .track-field input[type="range"] { flex: 1; min-width: 40px; accent-color: var(--accent); }
 
+/* 字幕 */
+.sub-list { display: flex; flex-direction: column; gap: 7px; }
+.sub-row { border: 1px solid var(--line); border-left: 2px solid transparent; border-radius: var(--radius-m); padding: 6px 8px; background: var(--bg-2); }
+.sub-row.on { border-left-color: var(--accent); background: rgba(79, 195, 217, .07); }
+.sub-top { display: flex; align-items: center; gap: 8px; }
+.sub-text {
+  flex: 1; min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg-1); color: var(--fg-1);
+  font-size: 11.5px; font-family: inherit;
+}
+.sub-text:focus { outline: none; border-color: var(--accent-line); }
+.sub-time { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.sub-time .track-field input[type="number"] { width: 50px; }
+
 .lp-foot {
   flex: none;
   display: flex; align-items: center; justify-content: space-between;

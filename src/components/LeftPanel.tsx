@@ -7,7 +7,7 @@ interface Props {
   onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
 }
 
-type Tab = 'start' | 'assets' | 'images'
+type Tab = 'start' | 'assets' | 'subs' | 'images'
 
 interface PickedImage { name: string; dataUrl: string; path: string }
 
@@ -72,6 +72,36 @@ export function LeftPanel({ onToast }: Props) {
     editor.updateScene(s => ({ ...s, audio: s.audio.filter(t => t.id !== id) }), { label: '删除音轨' })
   }
 
+  function addSubtitle() {
+    const start = Number(editor.state.time.toFixed(2))
+    const end = Math.min(editor.state.scene.canvas.duration, start + 2.5)
+    const id = `s_${Date.now().toString(36)}`
+    editor.updateScene(
+      s => ({ ...s, subtitles: [...s.subtitles, { id, start, end, text: '' }] }),
+      { label: '新增字幕' }
+    )
+  }
+
+  function patchSubtitle(id: string, patch: { start?: number; end?: number; text?: string }) {
+    editor.updateScene(
+      s => ({
+        ...s,
+        subtitles: s.subtitles.map(x => {
+          if (x.id !== id) return x
+          const next = { ...x, ...patch }
+          // 起点不能超过终点
+          if (next.end <= next.start) next.end = Math.min(s.canvas.duration, next.start + 0.5)
+          return next
+        })
+      }),
+      { label: '编辑字幕' }
+    )
+  }
+
+  function removeSubtitle(id: string) {
+    editor.updateScene(s => ({ ...s, subtitles: s.subtitles.filter(x => x.id !== id) }), { label: '删除字幕' })
+  }
+
   function useRefImage(img: { name: string; path: string }) {
     sendPrompt(referencePrompt(img.name, img.path))
   }
@@ -96,6 +126,9 @@ export function LeftPanel({ onToast }: Props) {
       <div className="lp-tabs">
         <button className={tab === 'start' ? 'on' : ''} onClick={() => setTab('start')}>开始</button>
         <button className={tab === 'assets' ? 'on' : ''} onClick={() => setTab('assets')}>素材</button>
+        <button className={tab === 'subs' ? 'on' : ''} onClick={() => setTab('subs')}>
+          字幕{editor.state.scene.subtitles.length ? ` ${editor.state.scene.subtitles.length}` : ''}
+        </button>
         <button className={tab === 'images' ? 'on' : ''} onClick={() => setTab('images')}>
           图生视频{first && last ? ' ●' : ''}
         </button>
@@ -196,6 +229,55 @@ export function LeftPanel({ onToast }: Props) {
               </div>
             </div>
           </>
+        )}
+
+        {tab === 'subs' && (
+          <div className="lp-section">
+            <div className="lp-section-head">
+              <span>字幕</span>
+              <button className="btn sm" onClick={addSubtitle}>＋ 从播放头加一条</button>
+            </div>
+            <div className="ref-hint">
+              字幕直接画在画面底部，导出时一起烧进 mp4。点一条会跳到它的开始时刻。
+            </div>
+            {editor.state.scene.subtitles.length === 0 && (
+              <div className="lp-empty">还没有字幕。把播放头停在要说话的位置，点上面的按钮。</div>
+            )}
+            <div className="sub-list">
+              {editor.state.scene.subtitles.map(s => (
+                <div key={s.id} className={`sub-row ${editor.state.time >= s.start && editor.state.time <= s.end ? 'on' : ''}`}>
+                  <div className="sub-top">
+                    <input
+                      className="sub-text"
+                      placeholder="字幕内容…"
+                      value={s.text}
+                      onChange={e => patchSubtitle(s.id, { text: e.target.value })}
+                      onFocus={() => editor.setTime(s.start)}
+                    />
+                    <button className="link" onClick={() => removeSubtitle(s.id)}>删除</button>
+                  </div>
+                  <div className="sub-time">
+                    <label className="track-field">
+                      <span>起</span>
+                      <input
+                        type="number" min={0} step={0.1} value={s.start}
+                        onChange={e => patchSubtitle(s.id, { start: Math.max(0, Number(e.target.value) || 0) })}
+                      />
+                    </label>
+                    <button className="link" onClick={() => editor.setTime(s.start)}>跳到</button>
+                    <label className="track-field">
+                      <span>止</span>
+                      <input
+                        type="number" min={0} step={0.1} value={s.end}
+                        onChange={e => patchSubtitle(s.id, { end: Math.max(0, Number(e.target.value) || 0) })}
+                      />
+                    </label>
+                    <span className="tiny muted">{(s.end - s.start).toFixed(1)}s</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         {tab === 'images' && (
