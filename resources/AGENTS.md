@@ -58,6 +58,7 @@ ease       // linear inQuad outQuad inOutQuad inCubic outCubic inOutCubic outBac
            // span(t,a,b) → 0..1   pulse(t,a,b) → 0→1→0
 util       // clamp lerp map rad(角度→弧度) deg(弧度→角度) rand(seed) wave(t,freq,phase) damped(t,amp,ω,λ,φ) time(sec)
 g          // 绘图工具，见下
+three      // 3D 原语（three.js 封装），见下
 asset(name) // 已加载的 <img>，可直接 ctx.drawImage(asset('assets/foo.png'), …)
 ```
 
@@ -93,6 +94,33 @@ g.image(name, x, y, w?, h?, { alpha, fit, radius, grayscale })
 
 `asset('assets/foo.png')` 直接返回已加载的 `<img>`，可以自己 `ctx.drawImage(asset('…'), …)`。
 场景渲染前会自动预加载所有引用到的图片，**不需要你自己等加载**。
+
+### 3D（`three`）
+
+需要真正的立体感（坐标系、磁场线、旋转矢量、曲面、立体光路）时用 `three`。
+它把 three.js 包成几个原语，渲染结果直接合成到当前画布上。
+
+```js
+const s = three.scene({ pos: [4.2, 3.2, 5.6], look: [0, 0, 0], fov: 45 })
+three.axes(s, { size: 1.8 })                                   // x/y/z 轴 + 标签
+three.arrow(s, [0, 0, 0], [1.6, 1.2, 0], { color: theme.accent })   // 3D 箭头
+three.sphere(s, [0, 0, 0], 0.45, { color: theme.accent2 })
+three.box(s, [1, 0, 0], [0.6, 0.6, 0.6], { color: '#8aa0b8' })
+three.plane(s, [0, -1, 0], [4, 4], { color: '#334455', normal: [0, 1, 0] })
+three.line(s, [[0,0,0], [1,1,0], [2,0,1]], { color: theme.accent3 })  // 折线
+three.tube(s, curvePoints, 0.03, { color: theme.accent })      // 管子（曲线更顺滑）
+three.label(s, [0, 1.5, 0], 'E', { color: '#fff', size: 0.34 })     // 3D 里的文字
+three.render(s)                                                // 必须最后调用
+```
+
+规则：
+
+1. **每帧重建 `s`**，渲染完引擎会自动释放显存。**不要**把 `s` 存到图层外面跨帧复用。
+2. 坐标是三维世界坐标 `[x, y, z]`，y 轴朝上；默认相机在 `(4.2, 3.2, 5.6)` 看向原点。
+3. 光照已经配好（环境光 + 半球光 + 主光 + 补光），**不用自己打光**。
+4. 一个图层只调用一次 `three.render`；要在同一画面叠 2D 元素，另起一个 2D 图层。
+5. 3D 图层同样必须只依赖 `t`：想转起来就用 `t` 算角度后传给 `pos` 或点的坐标。
+6. 不要把整幅画面都交给 3D —— 文字、公式、标注用 2D 图层更清楚更快。
 
 ## 图生视频：首尾帧 / 参考图
 

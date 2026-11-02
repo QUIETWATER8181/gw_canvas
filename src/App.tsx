@@ -134,6 +134,41 @@ export default function App() {
           console.log('SELFTEST image failed: ' + (e instanceof Error ? e.message : String(e)))
         }
 
+        // 3D 图层自检：three.* 必须真的把像素合成到 2D 画布上
+        try {
+          const threeScene = {
+            ...scene,
+            canvas: { ...scene.canvas, duration: 2 },
+            layers: [{
+              id: 'probe3d', name: '3D 自检', start: 0, end: 2,
+              draw: [
+                "const s = three.scene({ pos: [4.2, 3.2, 5.6], look: [0,0,0] })",
+                "three.axes(s, { size: 1.6 })",
+                "three.arrow(s, [0,0,0], [1.6, 1.2, 0], { color: '#4fc3d9' })",
+                "three.sphere(s, [0, 0, 0], 0.45, { color: '#f2b544' })",
+                "three.label(s, [0, 1.4, 0], 'E', { color: '#ffffff', size: 0.34 })",
+                "three.render(s)"
+              ].join('\n')
+            }]
+          }
+          r.render(threeScene as typeof scene, 0.6)
+          const W3 = r.element.width
+          const H3 = r.element.height
+          const d3 = r.element.getContext('2d')!.getImageData(0, 0, W3, H3).data
+          let lit3 = 0
+          let colored = 0
+          for (let i = 0; i < d3.length; i += 4) {
+            const v = (d3[i] + d3[i + 1] + d3[i + 2]) / 3
+            if (v > 40) lit3++
+            const mx = Math.max(d3[i], d3[i + 1], d3[i + 2])
+            const mn = Math.min(d3[i], d3[i + 1], d3[i + 2])
+            if (v > 40 && mx - mn > 40) colored++
+          }
+          console.log('SELFTEST three lit=' + lit3 + ' colored=' + colored + ' errors=' + JSON.stringify(r.lastErrors))
+        } catch (e) {
+          console.log('SELFTEST three failed: ' + (e instanceof Error ? e.message : String(e)))
+        }
+
         // prompt 拼装自检：首尾帧流程必须把两个路径、时长、必要步骤都带上
         {
           const { keyframePrompt } = await import('./content/prompts')

@@ -117,6 +117,9 @@ export function auditSceneInput(input: unknown): string[] {
       if (/\b(window|document|localStorage|fetch|XMLHttpRequest|setTimeout|setInterval|requestAnimationFrame|Date\.now|Math\.random)\b/.test(d)) {
         warn.push(`${at}（${name}）用了被禁用的全局（window/document/fetch/定时器/Math.random 等），画面必须只依赖 t`)
       }
+      if (/\bthree\s*\./.test(d) && !/\bthree\s*\.\s*render\s*\(/.test(d)) {
+        warn.push(`${at}（${name}）用了 three.* 但没有调用 three.render(s)，这一层什么都不会显示`)
+      }
     }
     if (layer.start !== undefined && layer.end !== undefined) {
       const s = Number(layer.start), e = Number(layer.end)

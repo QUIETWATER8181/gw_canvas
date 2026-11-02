@@ -29,6 +29,18 @@ g.glow(points,color,width?)                              发光折线
 g.sineWave(x0,x1,y0,amp,cycles,phase,{stroke,width})
 g.save() / g.restore() / g.clip(x,y,w,h,fn) / g.with({x,y,rotate,scale},fn)
 
+// 3D（three.js 封装，渲染结果合成到当前画布）
+const s = three.scene({fov?, pos:[4.2,3.2,5.6], look:[0,0,0]})
+three.axes(s,{size,labels,color})                坐标轴（带 x/y/z 标签）
+three.arrow(s,[0,0,0],[2,1,0],{color,radius,head,opacity})   3D 箭头
+three.sphere(s,[x,y,z],r,{color,opacity,wireframe,seg})
+three.box(s,[x,y,z],[w,h,d],{color,opacity,wireframe})
+three.plane(s,[x,y,z],[w,h],{color,opacity,normal:[0,1,0]})
+three.line(s,[[x,y,z],...],{color,width,radius,dashed})      radius>0 时是管子
+three.tube(s,[[x,y,z],...],r,{color})
+three.label(s,[x,y,z],'E',{color,size})          3D 空间里的文字标签
+three.render(s,{bg?})                            必须最后调用；每帧重建 s，别跨帧缓存
+
 // TeX 子集：\\frac{a}{b} \\sqrt{x} \\vec{v} \\hat{x} \\bar{x} x^2 x_i
 // \\alpha..\\omega \\Gamma..\\Omega \\cdot \\times \\pm \\leq \\geq \\neq \\approx
 // \\sum \\int \\partial \\nabla \\rightarrow \\Rightarrow \\infty \\text{中文}

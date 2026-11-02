@@ -1,4 +1,5 @@
 import type { SceneTheme } from '../shared/scene'
+import type { Three3D } from './three3d'
 
 export type Ctx2D = CanvasRenderingContext2D
 
@@ -29,6 +30,15 @@ export interface DrawScope {
   util: UtilFns
   /** 高级绘图原语 */
   g: DrawKit
+  /**
+   * 3D 原语（three.js 封装）。用法：
+   *   const s = three.scene({ pos:[4,3,6] })
+   *   three.axes(s)
+   *   three.arrow(s, [0,0,0], [2,1,0], { color:'#4fc3d9' })
+   *   three.render(s)
+   * 渲染结果会合成到当前 2D 画布上；每帧重建，不要跨帧缓存 s。
+   */
+  three: Three3D
   /**
    * 取一张已加载的图片（可直接传给 ctx.drawImage）。
    * 场景渲染前会自动 preload 所有 asset('…') / g.image('…') 引用到的图。

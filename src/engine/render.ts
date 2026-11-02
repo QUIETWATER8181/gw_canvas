@@ -1,6 +1,7 @@
 import type { Scene, SceneLayer } from '../shared/scene'
 import type { Ctx2D, DrawScope } from './types'
 import { createDrawKit } from './draw'
+import { createThree3D } from './three3d'
 import { assetImage } from './assets'
 import { ease, util } from './ease'
 
@@ -28,7 +29,7 @@ export function compileLayer(layer: SceneLayer): CompileResult {
     const fn = new Function(
       'scope',
       `"use strict";
-const { ctx, t, p, duration, width, height, cx, cy, theme, ease, util, g, asset } = scope;
+const { ctx, t, p, duration, width, height, cx, cy, theme, ease, util, g, asset, three } = scope;
 ${layer.draw}
 `
     ) as (scope: DrawScope) => void
@@ -84,6 +85,7 @@ export function renderScene(opts: RenderOptions): void {
   }
 
   const kit = createDrawKit({ width: W, height: H, theme, ctx })
+  const three = createThree3D({ width: W, height: H, theme, ctx })
   const duration = scene.canvas.duration
   const p = duration > 0 ? Math.max(0, Math.min(1, t / duration)) : 0
   const asset = opts.asset ?? assetImage
@@ -108,7 +110,7 @@ export function renderScene(opts: RenderOptions): void {
     if (layer.x || layer.y) ctx.translate(layer.x ?? 0, layer.y ?? 0)
     const scope: DrawScope = {
       t, p, duration, width: W, height: H, ctx, theme, cx: W / 2, cy: H / 2,
-      ease, util, g: kit, asset
+      ease, util, g: kit, asset, three
     }
     try {
       compiled.draw(scope)
