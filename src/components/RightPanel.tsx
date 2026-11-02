@@ -20,7 +20,8 @@ export function RightPanel({ chat, agent, onOpenSettings, onToast }: Props) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
-  const busy = sending || agent.phase === 'running' || agent.phase === 'starting'
+  const starting = agent.phase === 'starting'
+  const busy = sending || agent.phase === 'running' || starting
 
   async function send() {
     const text = draft.trim()
@@ -85,7 +86,7 @@ export function RightPanel({ chat, agent, onOpenSettings, onToast }: Props) {
           <textarea
             ref={taRef}
             className="rp-input"
-            placeholder={busy ? 'AI 正在处理…' : '描述你想做的物理画面，或直接说怎么改…'}
+            placeholder={starting ? '正在启动 AI 运行时（首次约 3–5 秒）…' : busy ? 'AI 正在处理…' : '描述你想做的物理画面，或直接说怎么改…'}
             value={draft}
             rows={3}
             onChange={e => setDraft(e.target.value)}
