@@ -223,29 +223,34 @@ function boxStyle(box: { x: number; y: number; w: number; h: number }, w: number
 
 /** 像素级命中测试：把每个图层单独画一遍，看点击点是否不透明 */
 function hitTest(renderer: SceneRenderer, scene: Scene, x: number, y: number, t: number): string | null {
+  // 关键：不要整幅缩放到 4×4 去采样。缩到 4×4 后 40px 的字、2px 的线只剩不到 0.1 像素，
+  // alpha 几乎为 0，于是永远只能命中铺满画面的背景层。
+  // 正确做法是把画布平移，让点击点正好落在小画布中心，按 1:1 渲染一小块。
+  const N = 9
+  const C = 4
   const tmp = document.createElement('canvas')
-  tmp.width = 4
-  tmp.height = 4
+  tmp.width = N
+  tmp.height = N
   const ctx = tmp.getContext('2d', { willReadFrequently: true })!
   for (let i = scene.layers.length - 1; i >= 0; i--) {
     const layer = scene.layers[i]
     if (layer.visible === false) continue
     if (layer.start !== undefined && t < layer.start) continue
     if (layer.end !== undefined && t > layer.end) continue
-    ctx.clearRect(0, 0, 4, 4)
-    ctx.save()
-    const s = 4 / Math.max(scene.canvas.width, scene.canvas.height)
-    ctx.scale(s, s)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, N, N)
+    ctx.setTransform(1, 0, 0, 1, C - x, C - y)
     renderScene({
       scene, ctx, width: scene.canvas.width, height: scene.canvas.height, t,
       onlyLayerId: layer.id, drawBackground: false, onLayerError: () => undefined,
       asset: assetImage
     })
-    ctx.restore()
-    const px = Math.floor((x / scene.canvas.width) * 4)
-    const py = Math.floor((y / scene.canvas.height) * 4)
-    const a = ctx.getImageData(Math.min(3, Math.max(0, px)), Math.min(3, Math.max(0, py)), 1, 1).data[3]
-    if (a > 8) return layer.id
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    // 取 3×3 里的最大 alpha，容忍 1px 误差（细线、细笔画）
+    const data = ctx.getImageData(C - 1, C - 1, 3, 3).data
+    let maxA = 0
+    for (let k = 3; k < data.length; k += 4) if (data[k] > maxA) maxA = data[k]
+    if (maxA > 8) return layer.id
     void renderer
   }
   return null
