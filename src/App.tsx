@@ -169,6 +169,15 @@ export default function App() {
           console.log('SELFTEST three failed: ' + (e instanceof Error ? e.message : String(e)))
         }
 
+        // 参考图 prompt：必须带路径、导入步骤、配色重建、拆图层
+        {
+          const { referencePrompt } = await import('./content/prompts')
+          const text = referencePrompt('参考.png', 'C:\\a\\ref.png')
+          const need = ['参考.png', 'C:\\a\\ref.png', 'asset_import', 'image_inspect', 'theme', '图层']
+          const missing = need.filter(k => !text.includes(k))
+          console.log('SELFTEST reference ' + (missing.length ? 'MISSING ' + JSON.stringify(missing) : 'ok, ' + text.length + ' chars'))
+        }
+
         // prompt 拼装自检：首尾帧流程必须把两个路径、时长、必要步骤都带上
         {
           const { keyframePrompt } = await import('./content/prompts')
