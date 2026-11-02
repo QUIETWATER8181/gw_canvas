@@ -366,8 +366,15 @@ export class AgentBridge {
     })
 
     wrap('scene_render_frame', async (args) => {
-      const t = Number(args.t ?? 0)
-      const result = await this.o.invokeRendererTool({ name: 'render_frame', args: { t } }, 120_000) as {
+      const times = Array.isArray(args.times) ? (args.times as unknown[]).map(Number).filter(Number.isFinite) : []
+      if (times.length > 1) {
+        const payload = { times: times.slice(0, 4), cols: args.cols }
+        return await this.o.invokeRendererTool({ name: 'render_frame', args: payload }, 240_000) as string
+      }
+      const t = Number(times[0] ?? args.t ?? 0)
+      const result = await this.o.invokeRendererTool(
+        { name: 'render_frame', args: { t, cols: args.cols } }, 120_000
+      ) as {
         path: string; errors: { layerId: string; error: string }[]; preview: string; size: number
       }
       const lines = [

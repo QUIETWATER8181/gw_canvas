@@ -17,11 +17,48 @@ export function ToolHost({ onExport, onToast }: Props) {
   useEffect(() => {
     const off = window.gewu.onToolInvoke(async inv => {
       if (inv.name === 'render_frame') {
-        const t = Number((inv.args as { t?: number }).t ?? 0)
+        const args = inv.args as { t?: number; times?: number[]; cols?: number }
         const scene = editor.state.scene
         const renderer = new SceneRenderer(scene.canvas.width, scene.canvas.height)
         await renderer.prepare(scene)
-        const result = renderer.capture(scene, t)
+
+        // 多帧模式：一次看完整段动画，省往返
+        const times = Array.isArray(args.times) && args.times.length
+          ? args.times.slice(0, 4).map(Number).filter(Number.isFinite)
+          : null
+
+        if (times && times.length > 1) {
+          const cols = Math.max(32, Math.min(120, Number(args.cols ?? 72)))
+          const blocks: string[] = []
+          const allErrors: { layerId: string; error: string }[] = []
+          for (const t of times) {
+            const cap = renderer.capture(scene, t, cols)
+            const b64 = cap.dataUrl.split(',')[1] ?? ''
+            const saved = await window.gewu.writeAsset(`preview-${t.toFixed(2).replace('.', '_')}.png`, base64ToBytes(b64))
+            for (const e of cap.errors) {
+              if (!allErrors.some(x => x.layerId === e.layerId && x.error === e.error)) allErrors.push(e)
+            }
+            const boxes = cap.boxes.length
+              ? cap.boxes.map(b => `  ${b.id}（${b.name}）x=${b.x} y=${b.y} w=${b.w} h=${b.h} 覆盖 ${b.coverage}%`).join('\n')
+              : '  （没有可见内容）'
+            blocks.push(
+              `── t=${t.toFixed(2)}s ── PNG: ${saved.path}\n` +
+              cap.preview.replace(/\x1b\[[0-9;]*m/g, '') +
+              `\n[该帧各图层占据范围]\n${boxes}`
+            )
+          }
+          const errText = allErrors.length
+            ? `\n\n【图层报错】\n${allErrors.map(e => `- ${e.layerId}: ${e.error}`).join('\n')}`
+            : ''
+          return (
+            `多帧预览（${cols} 列，暗→亮：空格 . : - = + * # % @）\n\n` +
+            blocks.join('\n\n') +
+            errText
+          )
+        }
+
+        const t = Number(times?.[0] ?? args.t ?? 0)
+        const result = renderer.capture(scene, t, Number(args.cols ?? 96))
         const base64 = result.dataUrl.split(',')[1] ?? ''
         const name = `preview-${t.toFixed(2).replace('.', '_')}.png`
         const saved = await window.gewu.writeAsset(name, base64ToBytes(base64))

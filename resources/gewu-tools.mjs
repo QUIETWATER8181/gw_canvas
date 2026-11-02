@@ -94,8 +94,12 @@ const tools = [
   },
   {
     name: 'scene_render_frame',
-    description: '渲染指定时刻的一帧，返回 PNG 路径 + 该帧的彩色字符预览 + 各图层运行时错误。改完代码必须调用它自检。',
-    parameters: { t: { type: 'number', required: true, description: '时间（秒）' } }
+    description: '渲染指定时刻并返回「字符预览 + 各图层实际占据范围 + 图层报错」，这是你唯一的眼睛。一次可给多个时刻（times，最多 4 个）来检查整段动画的走向。',
+    parameters: {
+      t: { type: 'number', description: '单个时刻（秒）' },
+      times: { type: 'array', items: { type: 'number' }, description: '多个时刻（秒），最多 4 个；给了 times 就忽略 t' },
+      cols: { type: 'number', description: '字符预览列数，缺省 96；多帧时自动降到 72' }
+    }
   },
   {
     name: 'scene_export_video',

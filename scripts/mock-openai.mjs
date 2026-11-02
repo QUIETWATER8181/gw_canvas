@@ -77,6 +77,7 @@ const CALLS = {
   bad: { name: 'scene_write', args: { scene: BAD_SCENE } },
   img: { name: 'image_inspect', args: { path: 'assets/kf_a.png', cols: 48 } },
   cmp: { name: 'image_compare', args: { first: 'assets/kf_a.png', last: 'assets/kf_b.png' } },
+  multi: { name: 'scene_render_frame', args: { times: [0.5, 6, 11.5] } },
   export: { name: 'scene_export_video', args: { name: 'mock-export.mp4', from: 0, to: 2 } },
   write: {
     name: 'scene_add_layer',
