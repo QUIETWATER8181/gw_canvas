@@ -229,6 +229,30 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  /** reasoning：模拟 deepseek-reasoner，先吐 reasoning_content 再吐正文 */
+  if (MODE === 'reasoning' && toolMsgs.length === 0) {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+    const rb = { id: 'chatcmpl-r', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: payload.model ?? 'mock' }
+    sse(res, { ...rb, choices: [{ index: 0, delta: { role: 'assistant', content: '', reasoning_content: '' }, finish_reason: null }] })
+    for (const piece of ['用户', '要一个', '偏振光', '场景，', '先写', '个正弦波', '试试。']) {
+      sse(res, { ...rb, choices: [{ index: 0, delta: { reasoning_content: piece }, finish_reason: null }] })
+      await new Promise(r => setTimeout(r, 30))
+    }
+    sse(res, {
+      ...rb,
+      choices: [{
+        index: 0,
+        delta: { tool_calls: [{ index: 0, id: 'call_r1', type: 'function', function: { name: 'scene_inspect', arguments: '{}' } }] },
+        finish_reason: null
+      }]
+    })
+    sse(res, { ...rb, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+    sse(res, { ...rb, choices: [], usage: { prompt_tokens: 100, completion_tokens: 30, total_tokens: 130 } })
+    res.write('data: [DONE]\n\n')
+    res.end()
+    return
+  }
+
   /**
    * nostream：假装是「不认 stream:true」的中转站——直接回一整块 JSON。
    * 用来验证主进程 model-proxy 的 toChunks 兜底路径。
