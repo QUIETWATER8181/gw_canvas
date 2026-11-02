@@ -33,7 +33,8 @@ export class ConfigStore {
     try {
       if (!existsSync(this.file)) return
       const raw = await readFile(this.file, 'utf8')
-      const parsed = JSON.parse(raw) as ConfigFile
+      // 记事本/部分编辑器会写 UTF-8 BOM，JSON.parse 见到就抛，配置会静默变空
+      const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as ConfigFile
       if (parsed?.version === 1) this.data = { ...DEFAULT_CONFIG, ...parsed }
     } catch {
       this.data = { ...DEFAULT_CONFIG }

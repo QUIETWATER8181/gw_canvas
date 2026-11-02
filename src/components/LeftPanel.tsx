@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useEditor } from '../state/editor'
 import { QUICK_STARTS } from '../content/quickstarts'
+import { keyframePrompt, referencePrompt } from '../content/prompts'
 
 interface Props {
   onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
@@ -8,9 +9,15 @@ interface Props {
 
 type Tab = 'start' | 'assets' | 'images'
 
+interface PickedImage { name: string; dataUrl: string; path: string }
+
 export function LeftPanel({ onToast }: Props) {
   const [tab, setTab] = useState<Tab>('start')
-  const [refImages, setRefImages] = useState<{ name: string; dataUrl: string; path: string }[]>([])
+  const [refImages, setRefImages] = useState<PickedImage[]>([])
+  const [first, setFirst] = useState<PickedImage | null>(null)
+  const [last, setLast] = useState<PickedImage | null>(null)
+  const [kfDuration, setKfDuration] = useState(6)
+  const [kfNote, setKfNote] = useState('')
   const [assets, setAssets] = useState<{ name: string; path: string; size: number }[]>([])
   const editor = useEditor()
   const fileRef = useRef<HTMLInputElement>(null)
@@ -27,11 +34,15 @@ export function LeftPanel({ onToast }: Props) {
     }
   }
 
-  async function pickImage() {
+  async function pickImage(slot?: 'first' | 'last') {
     const img = await window.gewu.pickImage()
     if (!img) return
-    setRefImages(prev => [...prev, { name: img.name, dataUrl: img.dataUrl, path: img.path }])
-    onToast({ text: `已加入参考图 ${img.name}`, kind: 'ok' })
+    if (slot === 'first') setFirst(img)
+    else if (slot === 'last') setLast(img)
+    else {
+      setRefImages(prev => [...prev, img])
+      onToast({ text: `已加入参考图 ${img.name}`, kind: 'ok' })
+    }
   }
 
   function sendPrompt(text: string) {
@@ -39,12 +50,22 @@ export function LeftPanel({ onToast }: Props) {
   }
 
   function useRefImage(img: { name: string; path: string }) {
-    sendPrompt(
-      `以我提供的参考图「${img.name}」（本地路径：${img.path}）为准，把它导入工作区并用代码还原成可动画的场景。\n` +
-      `要求：\n1. 先用 asset_import 把图导入 assets/，再用 ctx.drawImage(asset('assets/xxx'), ...) 作为底图或元素。\n` +
-      `2. 保持参考图的构图与配色，但把需要动的部分（箭头、光路、波形、粒子）拆成独立图层，用代码做动画。\n` +
-      `3. 先给出一版 6–10 秒的场景，渲染一帧自检后告诉我效果。`
-    )
+    sendPrompt(referencePrompt(img.name, img.path))
+  }
+
+  function buildKeyframe() {
+    if (!first || !last) {
+      onToast({ text: '首帧和尾帧都要选', kind: 'err' })
+      return
+    }
+    sendPrompt(keyframePrompt({
+      firstPath: first.path,
+      lastPath: last.path,
+      duration: kfDuration,
+      note: kfNote,
+      width: editor.state.scene.canvas.width,
+      height: editor.state.scene.canvas.height
+    }))
   }
 
   return (
@@ -52,7 +73,9 @@ export function LeftPanel({ onToast }: Props) {
       <div className="lp-tabs">
         <button className={tab === 'start' ? 'on' : ''} onClick={() => setTab('start')}>开始</button>
         <button className={tab === 'assets' ? 'on' : ''} onClick={() => setTab('assets')}>素材</button>
-        <button className={tab === 'images' ? 'on' : ''} onClick={() => setTab('images')}>参考图{refImages.length ? ` ${refImages.length}` : ''}</button>
+        <button className={tab === 'images' ? 'on' : ''} onClick={() => setTab('images')}>
+          图生视频{first && last ? ' ●' : ''}
+        </button>
       </div>
 
       <div className="lp-body">
@@ -109,31 +132,79 @@ export function LeftPanel({ onToast }: Props) {
         )}
 
         {tab === 'images' && (
-          <div className="lp-section">
-            <div className="lp-section-head">
-              <span>参考图 / 首尾帧</span>
-              <button className="btn sm" onClick={() => void pickImage()}>选择</button>
-            </div>
-            <div className="ref-hint">用于图生视频：上传首帧、尾帧或风格参考，agent 会用代码补出中间过程。</div>
-            <div className="ref-grid">
-              {refImages.map(img => (
-                <div key={img.path} className="ref-card">
-                  <img src={img.dataUrl} alt={img.name} />
-                  <div className="ref-meta">
-                    <span className="ref-name" title={img.name}>{img.name}</span>
-                    <button className="btn sm primary" onClick={() => useRefImage(img)}>用它生成</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {refImages.length === 0 && (
-              <button className="ref-drop" onClick={() => void pickImage()}>
-                <span>＋</span>
-                <span>选择一张参考图</span>
+          <>
+            <div className="lp-section">
+              <div className="lp-section-head">
+                <span>首尾帧补间</span>
+                <span className="tiny muted">两张图 → 一段动画</span>
+              </div>
+              <div className="kf-slots">
+                <button className={`kf-slot ${first ? 'filled' : ''}`} onClick={() => void pickImage('first')}>
+                  {first
+                    ? <><img src={first.dataUrl} alt={first.name} /><span className="kf-tag">首帧</span></>
+                    : <><span className="kf-plus">＋</span><span className="kf-label">首帧</span></>}
+                </button>
+                <div className="kf-arrow" aria-hidden>→</div>
+                <button className={`kf-slot ${last ? 'filled' : ''}`} onClick={() => void pickImage('last')}>
+                  {last
+                    ? <><img src={last.dataUrl} alt={last.name} /><span className="kf-tag">尾帧</span></>
+                    : <><span className="kf-plus">＋</span><span className="kf-label">尾帧</span></>}
+                </button>
+              </div>
+              <div className="kf-row">
+                <label className="kf-field">
+                  <span>时长</span>
+                  <input
+                    type="number" min={1} max={60} step={1}
+                    value={kfDuration}
+                    onChange={e => setKfDuration(Number(e.target.value))}
+                  />
+                  <span className="tiny muted">秒</span>
+                </label>
+                {(first || last) && (
+                  <button className="link" onClick={() => { setFirst(null); setLast(null) }}>清空</button>
+                )}
+              </div>
+              <input
+                className="kf-note"
+                placeholder="补充要求（可选）：镜头怎么动、要不要加标注…"
+                value={kfNote}
+                onChange={e => setKfNote(e.target.value)}
+              />
+              <button className="btn primary block" disabled={!first || !last} onClick={buildKeyframe}>
+                补出中间过程
               </button>
-            )}
+              <div className="ref-hint">
+                agent 会先「看」这两张图、算出主体位移，再决定是代码重建还是底图过渡。
+              </div>
+            </div>
+
+            <div className="lp-section">
+              <div className="lp-section-head">
+                <span>单张参考图</span>
+                <button className="btn sm" onClick={() => void pickImage()}>选择</button>
+              </div>
+              <div className="ref-hint">给一张风格或构图参考，agent 用代码还原，不一定要把原图放进画面。</div>
+              <div className="ref-grid">
+                {refImages.map(img => (
+                  <div key={img.path} className="ref-card">
+                    <img src={img.dataUrl} alt={img.name} />
+                    <div className="ref-meta">
+                      <span className="ref-name" title={img.name}>{img.name}</span>
+                      <button className="btn sm primary" onClick={() => useRefImage(img)}>用它生成</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {refImages.length === 0 && (
+                <button className="ref-drop" onClick={() => void pickImage()}>
+                  <span>＋</span>
+                  <span>选择一张参考图</span>
+                </button>
+              )}
+            </div>
             <input ref={fileRef} type="file" hidden />
-          </div>
+          </>
         )}
       </div>
 

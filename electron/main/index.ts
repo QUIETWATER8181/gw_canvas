@@ -14,6 +14,28 @@ let store: ConfigStore
 let sceneStore: SceneStore
 let bridge: AgentBridge
 
+// --log=<file>：把主进程的 console 落到文件。
+// Windows 上 Electron 是 GUI 子系统程序，PowerShell 的 > / *> 重定向收不到它的 stdout，
+// 联调时只能靠这个。
+const logArgv = process.argv.find(a => a.startsWith('--log='))
+if (logArgv) {
+  const logFile = logArgv.slice('--log='.length)
+  const { appendFileSync } = require('node:fs') as typeof import('node:fs')
+  const fmt = (v: unknown): string => {
+    if (typeof v === 'string') return v
+    if (v instanceof Error) return v.stack ?? v.message
+    try { return JSON.stringify(v) } catch { return String(v) }
+  }
+  const patch = (level: string, orig: (...a: unknown[]) => void) =>
+    (...args: unknown[]) => {
+      try { appendFileSync(logFile, `[${level}] ${args.map(fmt).join(' ')}\n`) } catch { /* ignore */ }
+      orig(...args)
+    }
+  console.log = patch('log', console.log.bind(console))
+  console.error = patch('err', console.error.bind(console))
+  console.warn = patch('warn', console.warn.bind(console))
+}
+
 const isDev = !app.isPackaged
 const RENDERER_DEV_URL = process.env['ELECTRON_RENDERER_URL']
 
@@ -195,6 +217,71 @@ app.whenReady().then(async () => {
         if (process.argv.includes('--exit-after')) setTimeout(() => app.quit(), 800)
       })()
     }, 1200)
+  }
+
+  // 开发调试：--shot=<png路径> 截图窗口后退出
+  //   --shot-click=<css选择器>  截图前先点一下（用来切 tab）
+  //   --shot-wait=<ms>          等多久再截，默认 1200
+  const shotArg = process.argv.find(a => a.startsWith('--shot='))
+  if (shotArg) {
+    const out = shotArg.slice('--shot='.length)
+    const clickArg = process.argv.find(a => a.startsWith('--shot-click='))
+    const waitArg = process.argv.find(a => a.startsWith('--shot-wait='))
+    const wait = waitArg ? Number(waitArg.slice('--shot-wait='.length)) : 1200
+    setTimeout(() => {
+      void (async () => {
+        try {
+          const wc = mainWindow?.webContents
+          if (!wc) throw new Error('no window')
+          if (clickArg) {
+            const sel = clickArg.slice('--shot-click='.length)
+            await wc.executeJavaScript(
+              `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (el) el.click(); return !!el })()`
+            )
+            await new Promise(r => setTimeout(r, 500))
+          }
+          const img = await wc.capturePage()
+          await writeFile(out, img.toPNG())
+          console.log('[shot] saved', out, img.getSize())
+        } catch (error) {
+          console.error('[shot] failed', error)
+        }
+        app.exit(0)
+      })()
+    }, wait)
+  }
+
+  // 开发调试：--probe=<js表达式> 在渲染进程里求值并打印结果，用于验证界面结构
+  //   --probe-click=<css选择器>  求值前先点一下
+  const probeFileArg = process.argv.find(a => a.startsWith('--probe-file='))
+  const probeArg = process.argv.find(a => a.startsWith('--probe='))
+  if (probeArg || probeFileArg) {
+    const js = probeFileArg
+      ? await readFile(probeFileArg.slice('--probe-file='.length), 'utf8')
+      : probeArg!.slice('--probe='.length)
+    const clickArg = process.argv.find(a => a.startsWith('--probe-click='))
+    const waitArg = process.argv.find(a => a.startsWith('--probe-wait='))
+    const wait = waitArg ? Number(waitArg.slice('--probe-wait='.length)) : 1500
+    setTimeout(() => {
+      void (async () => {
+        try {
+          const wc = mainWindow?.webContents
+          if (!wc) throw new Error('no window')
+          if (clickArg) {
+            const sel = clickArg.slice('--probe-click='.length)
+            await wc.executeJavaScript(
+              `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (el) el.click(); return !!el })()`
+            )
+            await new Promise(r => setTimeout(r, 500))
+          }
+          const value = await wc.executeJavaScript(js)
+          console.log('[probe] ' + (typeof value === 'string' ? value : JSON.stringify(value)))
+        } catch (error) {
+          console.error('[probe] failed', error)
+        }
+        app.exit(0)
+      })()
+    }, wait)
   }
 
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow() })

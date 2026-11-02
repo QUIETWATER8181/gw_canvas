@@ -134,6 +134,23 @@ export default function App() {
           console.log('SELFTEST image failed: ' + (e instanceof Error ? e.message : String(e)))
         }
 
+        // prompt 拼装自检：首尾帧流程必须把两个路径、时长、必要步骤都带上
+        {
+          const { keyframePrompt } = await import('./content/prompts')
+          const text = keyframePrompt({
+            firstPath: 'C:\\a\\first.png',
+            lastPath: 'C:\\a\\last.png',
+            duration: 8,
+            note: '镜头缓慢推近',
+            width: 1920,
+            height: 1080
+          })
+          const need = ['C:\\a\\first.png', 'C:\\a\\last.png', '8 秒', '镜头缓慢推近',
+            'image_inspect', 'image_compare', 'asset_import', 'times: [0, 4.0, 8]', '1920×1080']
+          const missing = need.filter(k => !text.includes(k))
+          console.log('SELFTEST prompt ' + (missing.length ? 'MISSING ' + JSON.stringify(missing) : 'ok, ' + text.length + ' chars'))
+        }
+
         const { exportScene } = await import('./engine/export')
         const full = location.search.includes('full')
         const out = full

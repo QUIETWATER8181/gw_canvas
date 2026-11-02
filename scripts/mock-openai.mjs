@@ -6,6 +6,11 @@ import { createServer } from 'node:http'
 const port = Number(process.argv[2] ?? 8787)
 const MODE = process.env.MOCK_MODE ?? 'text'
 
+// 夹具：默认指向工作区里的两张合成图，可用环境变量覆盖
+const WS = process.env.APPDATA ? `${process.env.APPDATA}\\gewu-video\\workspace` : '.'
+const FIXTURE_A = process.env.MOCK_FIXTURE_A ?? `${WS}\\assets\\kf_a.png`
+const FIXTURE_B = process.env.MOCK_FIXTURE_B ?? `${WS}\\assets\\kf_b.png`
+
 const DEMO_SCENE = {
   version: 1,
   meta: { title: 'mock 生成的场景', brief: '验证 scene_write 全链路', style: '深色矢量' },
@@ -71,6 +76,51 @@ const BAD_SCENE = {
   subtitles: 'oops'
 }
 
+/** 首尾帧模式：模拟真实模型拿到「首尾帧补间」prompt 之后的完整动作序列 */
+function keyframeTurn(toolResults) {
+  if (toolResults === 0) return { name: 'asset_import', args: { path: FIXTURE_A } }
+  if (toolResults === 1) return { name: 'asset_import', args: { path: FIXTURE_B } }
+  if (toolResults === 2) return { name: 'image_inspect', args: { path: 'assets/kf_a.png', cols: 48 } }
+  if (toolResults === 3) return { name: 'image_compare', args: { first: 'assets/kf_a.png', last: 'assets/kf_b.png' } }
+  if (toolResults === 4) return { name: 'scene_write', args: { scene: KEYFRAME_SCENE } }
+  if (toolResults === 5) return { name: 'scene_render_frame', args: { times: [0, 3, 6] } }
+  if (toolResults === 6) return { name: 'scene_export_video', args: { name: 'mock-keyframe.mp4', from: 0, to: 6 } }
+  return null
+}
+
+/** 首尾帧模式最后写出的场景：用 g.image 交叉淡入 + 代码画的箭头承担运动 */
+const KEYFRAME_SCENE = {
+  version: 1,
+  meta: { title: '首尾帧补间（mock）', brief: '验证图生视频链路', style: '深色 + 底图过渡' },
+  canvas: { width: 1920, height: 1080, fps: 30, duration: 6 },
+  layers: [
+    { id: 'bg', name: '背景', start: 0, end: 6, draw: "ctx.fillStyle = theme.bg\nctx.fillRect(0, 0, width, height)" },
+    {
+      id: 'first',
+      name: '首帧底图',
+      start: 0,
+      end: 6,
+      draw: "const a = 1 - ease.inOutCubic(ease.span(t, 2.4, 3.6))\nif (a > 0.001) g.image('assets/kf_a.png', cx, cy, 640, 360, { alpha: a })"
+    },
+    {
+      id: 'last',
+      name: '尾帧底图',
+      start: 0,
+      end: 6,
+      draw: "const a = ease.inOutCubic(ease.span(t, 2.4, 3.6))\nif (a > 0.001) g.image('assets/kf_b.png', cx, cy, 640, 360, { alpha: a })"
+    },
+    {
+      id: 'arrow',
+      name: '运动箭头',
+      start: 0,
+      end: 6,
+      draw: "const k = ease.inOutCubic(ease.span(t, 0.2, 5.6))\nconst x0 = cx - 320 + 160, x1 = cx - 320 + 460\ng.arrow(x0, cy + 220, x0 + (x1 - x0) * k, cy + 220, { stroke: theme.accent2, width: 4 })"
+    }
+  ],
+  audio: [],
+  subtitles: []
+}
+
 const CALLS = {
   inspect: { name: 'scene_inspect', args: {} },
   frame: { name: 'scene_render_frame', args: { t: 5 } },
@@ -126,7 +176,11 @@ const server = createServer(async (req, res) => {
   const id = 'chatcmpl-mock'
   const base = { id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: payload.model ?? 'mock' }
 
-  const nextCall = MODE === 'scene' ? sceneTurn(toolMsgs.length) : (MODE !== 'text' && toolMsgs.length === 0 ? (CALLS[MODE] ?? CALLS.inspect) : null)
+  const nextCall = MODE === 'scene'
+    ? sceneTurn(toolMsgs.length)
+    : MODE === 'kf'
+      ? keyframeTurn(toolMsgs.length)
+      : (MODE !== 'text' && toolMsgs.length === 0 ? (CALLS[MODE] ?? CALLS.inspect) : null)
   if (nextCall) {
     console.log('[mock] emitting tool_call %s (round %d)', nextCall.name, toolMsgs.length + 1)
     sse(res, { ...base, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
