@@ -83,6 +83,7 @@ function prettyTool(title: string): string {
     image_inspect: '看图',
     image_compare: '比对两张图',
     asset_import: '导入素材',
+    tts_speak: '配音',
     ask_user: '向你提问'
   }
   for (const [k, v] of Object.entries(map)) if (title.includes(k)) return v

@@ -24,6 +24,8 @@ const api: GewuApi = {
   importAsset: () => ipcRenderer.invoke('gewu:import-asset'),
   revealPath: path => ipcRenderer.invoke('gewu:reveal', path),
   listAssets: () => ipcRenderer.invoke('gewu:list-assets'),
+  ttsVoices: () => ipcRenderer.invoke('gewu:tts-voices'),
+  tts: input => ipcRenderer.invoke('gewu:tts', input),
 
   sendPrompt: (text, context) => ipcRenderer.invoke('gewu:send-prompt', text, context),
   cancelPrompt: () => ipcRenderer.invoke('gewu:cancel-prompt'),

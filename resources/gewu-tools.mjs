@@ -116,6 +116,16 @@ const tools = [
     parameters: { path: { type: 'string', required: true, description: '源文件的绝对路径' } }
   },
   {
+    name: 'tts_speak',
+    description: '用本机离线语音（Windows SAPI，不需要 Key）把一段中文念成 wav，存进 assets/ 并返回 path 和 durationSec。要加旁白时：先 tts_speak 拿到时长，再把这个 path 写进 scene.audio 的 src，start 用字幕的开始时刻。',
+    parameters: {
+      text: { type: 'string', required: true, description: '要念的文字，别超过 60 字，长句拆成多条' },
+      name: { type: 'string', description: '文件名（不含扩展名），缺省自动生成；同一个 name 会覆盖，适合重做某一句' },
+      voice: { type: 'string', description: '音色名，缺省用系统中文音色' },
+      rate: { type: 'number', description: '语速 -10~10，0 是正常，中文旁白建议 0~2' }
+    }
+  },
+  {
     name: 'check_scene',
     description: '抽样渲染整条时间轴，报告图层运行时错误；同时做静态检查（id 重复、draw 写成函数声明或箭头函数、用了被禁用的全局、end 不大于 start、画布尺寸不对等）。写完场景后应该跑一次。',
     parameters: { samples: { type: 'number', description: '抽样点数，缺省 8' } }

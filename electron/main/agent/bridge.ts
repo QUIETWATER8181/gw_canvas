@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { DshProcess } from './acp-process'
 import { ModelProxy } from './model-proxy'
 import { ToolGateway } from './tool-gateway'
+import { synthesize } from '../tts'
 import type { AgentStatus, ChatMessage, ScenePatch, ToolInvocation, ToolResult } from '@shared/ipc'
 import type { Scene } from '@shared/scene'
 
@@ -442,6 +443,28 @@ export class AgentBridge {
       return `已导出视频：${result.path}（${result.frames} 帧 / ${result.seconds.toFixed(1)}s）`
     })
 
+    // 离线配音：系统 SAPI，不需要 Key。返回的 path 直接写进 scene.audio[].src
+    wrap('tts_speak', async (args) => {
+      const text = String(args.text ?? '').trim()
+      if (!text) throw new Error('缺少 text')
+      const { wav, durationSec } = await synthesize(text, {
+        voice: typeof args.voice === 'string' ? args.voice : undefined,
+        rate: Number.isFinite(Number(args.rate)) ? Number(args.rate) : undefined
+      })
+      const assetsDir = join(this.o.getWorkspace(), 'assets')
+      await mkdir(assetsDir, { recursive: true })
+      const base = String(args.name ?? `tts-${Date.now()}`).replace(/[^\w.\-\u4e00-\u9fa5]/g, '_').replace(/\.wav$/i, '')
+      const fileName = `${base}.wav`
+      await writeFile(join(assetsDir, fileName), wav)
+      return {
+        ok: true,
+        path: `assets/${fileName}`,
+        durationSec,
+        bytes: wav.length,
+        hint: '把它写进 scene.audio：[{ id, name, src: path, start: 秒, volume: 1 }]'
+      }
+    })
+
     wrap('image_inspect', async (args) => {
       const path = String(args.path ?? '')
       if (!path) throw new Error('缺少 path')
@@ -470,8 +493,7 @@ export class AgentBridge {
       return { ok: true, path: `assets/${name}`, size: st.size, url: `gewu://workspace/assets/${encodeURIComponent(name)}` }
     })
 
-    wrap('ask_user', async (args) => {
-      const question = String(args.question ?? '')
+    wrap('ask_user', async (args) => {      const question = String(args.question ?? '')
       const options = Array.isArray(args.options) ? args.options.map(String) : []
       this.chat({ role: 'system', text: `❓ ${question}${options.length ? `\n可选：${options.join(' / ')}` : ''}` })
       return '问题已展示给用户，等待用户回复。请结束本轮，不要自行假设答案。'

@@ -237,8 +237,16 @@ g.math(`\\theta = ${Math.round(deg)}^\\circ`, 1200, cy + 190, { size: 34, color:
 ## 导出与音频
 
 - 用户点「导出」时前端会逐帧渲染并用 WebCodecs 编码成 mp4，`scene.audio` 里的音轨会被混入。
-- 需要配音时，让用户提供音频文件路径，用 `asset_import` 导入后写进 `audio` 数组：
-  `{ "id": "vo1", "name": "旁白", "src": "assets/vo1.mp3", "start": 0, "volume": 1 }`
+- **要配音就用 `tts_speak`**（本机离线语音，不需要 Key、不联网）：
+  ```
+  tts_speak({ text: '偏振光通过第一个偏振片后，变成线偏振光', name: 'vo-1' })
+  → { path: 'assets/vo-1.wav', durationSec: 4.3 }
+  ```
+  再把返回的 path 写进 `audio`，`start` 用这句字幕的开始时刻：
+  `{ "id": "vo-1", "name": "旁白1", "src": "assets/vo-1.wav", "start": 0, "volume": 1 }`
+- **旁白要一句一条音轨**，一条长音轨没法跟画面分段对齐。句子控制在 60 字以内。
+- 拿到 `durationSec` 后，把对应字幕的 `end` 设成 `start + durationSec`，让字幕和语音同时结束。
+- 用户自己提供了音频文件时，用 `asset_import` 导入后同样写进 `audio` 数组。
 - 字幕写进 `subtitles`：`{ "id": "s1", "start": 0.5, "end": 3.2, "text": "……" }`
 
 ## 边界

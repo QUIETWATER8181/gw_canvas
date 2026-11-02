@@ -19,11 +19,21 @@ export function LeftPanel({ onToast }: Props) {
   const [kfDuration, setKfDuration] = useState(6)
   const [kfNote, setKfNote] = useState('')
   const [assets, setAssets] = useState<{ name: string; path: string; size: number }[]>([])
+  const [ttsVoices, setTtsVoices] = useState<{ name: string; culture: string }[]>([])
+  const [ttsVoice, setTtsVoice] = useState('')
+  const [ttsBusy, setTtsBusy] = useState(false)
   const editor = useEditor()
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     void refreshAssets()
+    // 只取一次音色；失败就让用户用系统默认
+    void window.gewu.ttsVoices().then(r => {
+      if (!r.ok) return
+      setTtsVoices(r.voices)
+      const zh = r.voices.find(v => v.culture.toLowerCase().startsWith('zh'))
+      setTtsVoice(zh?.name ?? r.voices[0]?.name ?? '')
+    }).catch(() => undefined)
   }, [])
 
   async function refreshAssets() {
@@ -100,6 +110,50 @@ export function LeftPanel({ onToast }: Props) {
 
   function removeSubtitle(id: string) {
     editor.updateScene(s => ({ ...s, subtitles: s.subtitles.filter(x => x.id !== id) }), { label: '删除字幕' })
+  }
+
+  /** 把一条字幕念出来，结果作为音轨挂到它的开始时刻 */
+  async function dubOne(sub: { id: string; text: string; start: number; end: number }): Promise<boolean> {
+    if (!sub.text.trim()) return false
+    const res = await window.gewu.tts({ text: sub.text, name: `tts-${sub.id}`, voice: ttsVoice || undefined })
+    if (!res.ok || !res.path) {
+      onToast({ text: res.error ?? '配音失败', kind: 'err' })
+      return false
+    }
+    const dur = res.durationSec ?? 0
+    editor.updateScene(s => {
+      const track = { id: `vo-${sub.id}`, name: sub.text.slice(0, 14), src: res.path!, start: sub.start, volume: 1 }
+      const exists = s.audio.some(t => t.id === track.id)
+      // 语音比字幕长就把字幕拉长到念完为止（只延长，不缩短）
+      const subtitles = dur > 0 && sub.start + dur > sub.end
+        ? s.subtitles.map(x => (x.id === sub.id ? { ...x, end: Math.round((sub.start + dur) * 10) / 10 } : x))
+        : s.subtitles
+      return {
+        ...s,
+        subtitles,
+        audio: exists ? s.audio.map(t => (t.id === track.id ? track : t)) : [...s.audio, track]
+      }
+    }, { label: '生成配音' })
+    return true
+  }
+
+  async function dubAll() {
+    const list = editor.state.scene.subtitles.filter(s => s.text.trim())
+    if (!list.length) {
+      onToast({ text: '字幕都是空的，先写点内容', kind: 'err' })
+      return
+    }
+    setTtsBusy(true)
+    let done = 0
+    try {
+      for (const s of list) {
+        if (await dubOne(s)) done++
+      }
+      onToast({ text: done === list.length ? `已生成 ${done} 条配音` : `生成了 ${done}/${list.length} 条配音`, kind: done ? 'ok' : 'err' })
+    } finally {
+      setTtsBusy(false)
+      void refreshAssets()
+    }
   }
 
   function useRefImage(img: { name: string; path: string }) {
@@ -240,6 +294,24 @@ export function LeftPanel({ onToast }: Props) {
             <div className="ref-hint">
               字幕直接画在画面底部，导出时一起烧进 mp4。点一条会跳到它的开始时刻。
             </div>
+            <div className="tts-bar">
+              <button
+                className="btn sm"
+                onClick={() => void dubAll()}
+                disabled={ttsBusy || !editor.state.scene.subtitles.some(s => s.text.trim())}
+                title="用系统自带的中文语音把每条字幕念一遍，自动挂到对应时刻"
+              >
+                {ttsBusy ? '正在合成…' : '用字幕生成配音'}
+              </button>
+              {ttsVoices.length > 1 && (
+                <select className="tts-voice" value={ttsVoice} onChange={e => setTtsVoice(e.target.value)}>
+                  {ttsVoices.map(v => (
+                    <option key={v.name} value={v.name}>{v.name.replace('Microsoft ', '').replace(' Desktop', '')} · {v.culture}</option>
+                  ))}
+                </select>
+              )}
+              {ttsVoices.length === 1 && <span className="tiny muted">{ttsVoices[0].name.replace('Microsoft ', '').replace(' Desktop', '')}</span>}
+            </div>
             {editor.state.scene.subtitles.length === 0 && (
               <div className="lp-empty">还没有字幕。把播放头停在要说话的位置，点上面的按钮。</div>
             )}
@@ -265,6 +337,14 @@ export function LeftPanel({ onToast }: Props) {
                       />
                     </label>
                     <button className="link" onClick={() => editor.setTime(s.start)}>跳到</button>
+                    <button
+                      className="link"
+                      disabled={ttsBusy || !s.text.trim()}
+                      onClick={() => { setTtsBusy(true); void dubOne(s).finally(() => { setTtsBusy(false); void refreshAssets() }) }}
+                      title="念这一条"
+                    >
+                      🔊 配音
+                    </button>
                     <label className="track-field">
                       <span>止</span>
                       <input

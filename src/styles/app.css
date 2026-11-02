@@ -287,6 +287,15 @@
 .sub-time { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
 .sub-time .track-field input[type="number"] { width: 50px; }
 
+.tts-bar { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px; }
+.tts-voice {
+  flex: 1; min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg-1); color: var(--fg-2);
+  font-size: 11px; font-family: inherit;
+}
+
 .lp-foot {
   flex: none;
   display: flex; align-items: center; justify-content: space-between;

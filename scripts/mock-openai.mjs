@@ -58,6 +58,47 @@ function sceneTurn(toolResults) {
   return null
 }
 
+/**
+ * tts 模式：先调 tts_speak 合成一句旁白，拿到 path/durationSec 后
+ * 再把它们写进 scene.audio —— 验证「agent 自己配音」这条链路。
+ */
+function ttsTurn(toolResults, toolMsgs) {
+  if (toolResults === 0) {
+    return { name: 'tts_speak', args: { text: '马吕斯定律：透射光强正比于入射光强乘以余弦的平方。', name: 'vo-agent', rate: 1 } }
+  }
+  if (toolResults === 1) {
+    const last = toolMsgs[toolMsgs.length - 1]
+    const raw = typeof last?.content === 'string' ? last.content : JSON.stringify(last?.content ?? '')
+    const m = raw.match(/\{"ok":true[^}]*"path":"([^"]+)"[^}]*"durationSec":([0-9.]+)/)
+    if (!m) throw new Error('mock: 没能从工具结果里解析出 path/durationSec：' + raw.slice(0, 200))
+    const [, path, dur] = m
+    const duration = Math.max(6, Math.ceil(Number(dur) + 1))
+    return {
+      name: 'scene_write',
+      args: {
+        scene: {
+          version: 1,
+          meta: { title: 'agent 自己配音', brief: 'tts_speak → scene_write', style: '深色矢量' },
+          canvas: { width: 1920, height: 1080, fps: 30, duration },
+          layers: [
+            {
+              id: 'bg', name: '背景', start: 0, end: duration,
+              draw: "const gd = ctx.createLinearGradient(0, 0, 0, height)\ngd.addColorStop(0, '#101820')\ngd.addColorStop(1, '#080c11')\nctx.fillStyle = gd\nctx.fillRect(0, 0, width, height)"
+            },
+            {
+              id: 'title', name: '标题', start: 0, end: duration,
+              draw: "g.text('马吕斯定律', 120, 180, { size: 64, weight: 700, color: theme.fg })\ng.text('I = I₀cos²θ', 120, 260, { size: 36, color: theme.accent })"
+            }
+          ],
+          audio: [{ id: 'vo-agent', name: '旁白', src: path, start: 0, volume: 1 }],
+          subtitles: [{ id: 's-agent', start: 0, end: Number(dur), text: '马吕斯定律：透射光强正比于入射光强乘以余弦的平方。' }]
+        }
+      }
+    }
+  }
+  return null
+}
+
 /** 故意写坏的场景，用来验证写入前的静态检查 */
 const BAD_SCENE = {
   version: 1,
@@ -182,7 +223,9 @@ const server = createServer(async (req, res) => {
     ? sceneTurn(toolMsgs.length)
     : MODE === 'kf'
       ? keyframeTurn(toolMsgs.length)
-      : (MODE !== 'text' && toolMsgs.length === 0 ? (CALLS[MODE] ?? CALLS.inspect) : null)
+      : MODE === 'tts'
+        ? ttsTurn(toolMsgs.length, toolMsgs)
+        : (MODE !== 'text' && toolMsgs.length === 0 ? (CALLS[MODE] ?? CALLS.inspect) : null)
   if (nextCall) {
     console.log('[mock] emitting tool_call %s (round %d)', nextCall.name, toolMsgs.length + 1)
     sse(res, { ...base, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })

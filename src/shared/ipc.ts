@@ -96,6 +96,20 @@ export interface PromptContext {
   region?: { x: number; y: number; w: number; h: number }
 }
 
+/** 配音结果：wav 已写进工作区 assets/ */
+export interface TtsResult {
+  ok: boolean
+  path?: string
+  durationSec?: number
+  bytes?: number
+  error?: string
+}
+
+export interface TtsVoice {
+  name: string
+  culture: string
+}
+
 /** preload 暴露给渲染进程的 API */
 export interface GewuApi {
   getState(): Promise<AppState>
@@ -111,6 +125,11 @@ export interface GewuApi {
   importAsset(): Promise<{ name: string; path: string; kind: string } | null>
   revealPath(path: string): Promise<void>
   listAssets(): Promise<{ name: string; path: string; size: number }[]>
+
+  /** 系统里可用的 TTS 音色 */
+  ttsVoices(): Promise<{ ok: boolean; voices: TtsVoice[]; error?: string }>
+  /** 把文字合成成 wav 存到 assets/，用于字幕配音 */
+  tts(input: { text: string; name?: string; voice?: string; rate?: number; volume?: number }): Promise<TtsResult>
 
   sendPrompt(text: string, context?: PromptContext): Promise<void>
   cancelPrompt(): Promise<void>

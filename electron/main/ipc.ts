@@ -7,6 +7,7 @@ import type { AgentBridge } from './agent/bridge'
 import type { AppState, ExportRequest, PromptContext } from '@shared/ipc'
 import type { Scene } from '@shared/scene'
 import { friendlyHttpError, modelsUrl } from './agent/http-errors'
+import { listVoices, synthesize } from './tts'
 
 /** fetch 抛出的底层错误（DNS / 证书 / 超时 / 连接被拒）也要说人话 */
 function explainFetchError(error: unknown, baseUrl: string): string {
@@ -129,6 +130,32 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle('gewu:reveal', (_e, path: string) => { shell.showItemInFolder(path) })
   ipcMain.handle('gewu:list-assets', () => deps.sceneStore.listAssets())
+
+  // ---- 配音（离线 SAPI，不需要 Key） ----
+  ipcMain.handle('gewu:tts-voices', async () => {
+    try {
+      return { ok: true, voices: await listVoices() }
+    } catch (error) {
+      return { ok: false, voices: [], error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('gewu:tts', async (_e, input: { text: string; name?: string; voice?: string; rate?: number; volume?: number }) => {
+    try {
+      const { wav, durationSec } = await synthesize(input.text, {
+        voice: input.voice, rate: input.rate, volume: input.volume
+      })
+      const assetsDir = join(deps.sceneStore.workspace, 'assets')
+      await mkdir(assetsDir, { recursive: true })
+      // 文件名固定（调用方传 tts-<字幕id>），重新生成时直接覆盖，不会越攒越多
+      const base = (input.name ?? `tts-${Date.now()}`).replace(/[^\w.\-\u4e00-\u9fa5]/g, '_')
+      const fileName = base.endsWith('.wav') ? base : `${base}.wav`
+      await writeFile(join(assetsDir, fileName), wav)
+      return { ok: true, path: `assets/${fileName}`, durationSec, bytes: wav.length }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
 
   ipcMain.handle('gewu:send-prompt', async (_e, text: string, context?: PromptContext) => {
     await deps.bridge.prompt(text, context)
