@@ -191,7 +191,8 @@ export default function App() {
         const out = full
           ? await exportScene({ scene, fps: scene.canvas.fps })
           : await exportScene({ scene, to: 4, fps: 24 })
-        const res = await window.gewu.saveExport(full ? 'demo.mp4' : '_selftest.mp4', out.bytes)
+        // 注意：--full 也写到 _selftest-full.mp4，绝不覆盖 demo.mp4（那是要交付的样片）
+        const res = await window.gewu.saveExport(full ? '_selftest-full.mp4' : '_selftest.mp4', out.bytes)
         console.log('SELFTEST export ' + JSON.stringify({ ok: res.ok, frames: out.frames, bytes: out.bytes.length, container: out.container }))
       } catch (e) {
         console.log('SELFTEST failed: ' + (e instanceof Error ? e.message : String(e)))
