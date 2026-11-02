@@ -122,8 +122,15 @@ export function auditSceneInput(input: unknown): string[] {
   const canvas = raw.canvas as Record<string, unknown> | undefined
   if (canvas && typeof canvas === 'object') {
     const w = Number(canvas.width), h = Number(canvas.height)
-    if (Number.isFinite(w) && w !== 1920) warn.push(`画布宽度 ${w} 不是 1920，坐标会整体缩放，建议改成 1920`)
-    if (Number.isFinite(h) && h !== 1080) warn.push(`画布高度 ${h} 不是 1080，坐标会整体缩放，建议改成 1080`)
+    // 整个产品（导出、缩略图、选区坐标）都按 1920×1080 设计，别让模型改画布尺寸
+    if (Number.isFinite(w) && w !== 1920) {
+      warn.push(`画布宽度 ${w} 已强制改成 1920（本产品只用 1920×1080 设计坐标，改尺寸会让所有图层错位）`)
+      canvas.width = 1920
+    }
+    if (Number.isFinite(h) && h !== 1080) {
+      warn.push(`画布高度 ${h} 已强制改成 1080（本产品只用 1920×1080 设计坐标）`)
+      canvas.height = 1080
+    }
   }
   if (raw.subtitles !== undefined && !Array.isArray(raw.subtitles)) warn.push('subtitles 不是数组，已忽略')
   if (raw.audio !== undefined && !Array.isArray(raw.audio)) warn.push('audio 不是数组，已忽略')
