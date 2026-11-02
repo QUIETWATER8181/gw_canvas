@@ -1,0 +1,29 @@
+# 依赖与构建产物
+node_modules/
+out/
+dist/
+release/
+
+# 隔离运行时 378MB，不进仓库（用 scripts/setup-runtime.md 的说明重新获取）
+vendor/
+
+# 原始素材（体积大，作者本地保留）
+*.mp4
+*.pptx
+*.mov
+_refs/
+_recovered/
+_xingyun_extract/
+_testhome/
+
+# 调试残留
+_preview-*.txt
+_frame-*.png
+_only-*.png
+_selftest.mp4
+_dump.json
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db

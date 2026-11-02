@@ -1,0 +1,213 @@
+import { app, BrowserWindow, ipcMain, dialog, shell, protocol, net } from 'electron'
+import { join, extname } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { mkdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { ConfigStore } from './store'
+import { SceneStore } from './scene-store'
+import { AgentBridge } from './agent/bridge'
+import { registerIpc } from './ipc'
+import type { Scene } from '@shared/scene'
+
+let mainWindow: BrowserWindow | null = null
+let store: ConfigStore
+let sceneStore: SceneStore
+let bridge: AgentBridge
+
+const isDev = !app.isPackaged
+const RENDERER_DEV_URL = process.env['ELECTRON_RENDERER_URL']
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'gewu',
+    // corsEnabled + ACAO 响应头：否则 <img> 会把 canvas 标脏，toDataURL/getImageData 直接抛错，
+    // 带图片的场景就没法渲染预览、也没法导出
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true, bypassCSP: false }
+  }
+])
+
+function runtimeRoot(): string {
+  if (app.isPackaged) return join(process.resourcesPath, 'dsh-runtime')
+  return join(app.getAppPath(), 'vendor', 'dsh-runtime')
+}
+
+function agentsDoc(): string {
+  if (app.isPackaged) return join(process.resourcesPath, 'AGENTS.md')
+  return join(app.getAppPath(), 'resources', 'AGENTS.md')
+}
+
+/** resources/ 下的随包文件 */
+function resourceFile(name: string): string {
+  if (app.isPackaged) return join(process.resourcesPath, name)
+  return join(app.getAppPath(), 'resources', name)
+}
+
+async function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1600,
+    height: 1000,
+    minWidth: 1180,
+    minHeight: 720,
+    show: false,
+    backgroundColor: '#0a0e13',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#0a0e13', symbolColor: '#93a4b1', height: 44 },
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+
+  mainWindow.once('ready-to-show', () => mainWindow?.show())
+
+  if (isDev) {
+    mainWindow.webContents.on('console-message', (_e, level, message, line, source) => {
+      console.log(`[renderer:${level}] ${message} (${source}:${line})`)
+    })
+    mainWindow.webContents.on('render-process-gone', (_e, details) => {
+      console.error('[renderer gone]', JSON.stringify(details))
+    })
+  }
+
+  const search = process.argv.includes('--selftest')
+    ? `selftest=1${process.argv.includes('--full') ? '&full=1' : ''}`
+    : ''
+  if (RENDERER_DEV_URL) {
+    await mainWindow.loadURL(RENDERER_DEV_URL + (search ? `?${search}` : ''))
+  } else {
+    await mainWindow.loadFile(join(__dirname, '../renderer/index.html'), search ? { search } : undefined)
+  }
+
+  mainWindow.on('closed', () => { mainWindow = null })
+}
+
+function wireBridge() {
+  bridge = new AgentBridge({
+    runtimeRoot: runtimeRoot(),
+    pluginSource: resourceFile('gewu-tools.mjs'),
+    dataRoot: join(app.getPath('userData'), 'agent'),
+    getConnection: () => store.getActiveConnectionSecret(),
+    getWorkspace: () => sceneStore.workspace,
+    getScenePath: () => sceneStore.scenePath,
+    onChat: msg => {
+      mainWindow?.webContents.send('gewu:chat', msg)
+      if (isDev) console.log(`[chat:${msg.role}] ${msg.text.replace(/\s+/g, ' ').slice(0, 300)}`)
+    },
+    onStatus: status => mainWindow?.webContents.send('gewu:agent-status', status),
+    onSceneChanged: patch => {
+      mainWindow?.webContents.send('gewu:scene-changed', patch)
+      sceneStore.invalidate()
+    },
+    invokeRendererTool: (inv, timeoutMs) => invokeRendererTool(inv, timeoutMs),
+    log: (level, text) => {
+      if (isDev) console.log(`[agent:${level}]`, text)
+    }
+  })
+}
+
+/** 主进程 → 渲染进程的工具调用（渲染/导出在渲染进程里做） */
+const pendingTools = new Map<string, { resolve(v: unknown): void; reject(e: Error): void; timer: NodeJS.Timeout }>()
+let toolSeq = 0
+
+function invokeRendererTool(inv: { name: string; args: unknown }, timeoutMs = 180_000): Promise<unknown> {
+  if (!mainWindow) return Promise.reject(new Error('窗口未就绪'))
+  const id = `tool-${++toolSeq}`
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingTools.delete(id)
+      reject(new Error(`工具 ${inv.name} 渲染超时`))
+    }, timeoutMs)
+    pendingTools.set(id, { resolve, reject, timer })
+    mainWindow!.webContents.send('gewu:tool-invoke', { id, name: inv.name, args: inv.args })
+  })
+}
+
+ipcMain.on('gewu:tool-result', (_e, payload: { id: string; ok: boolean; result?: unknown; error?: string }) => {
+  const p = pendingTools.get(payload.id)
+  if (!p) return
+  pendingTools.delete(payload.id)
+  clearTimeout(p.timer)
+  if (payload.ok) p.resolve(payload.result)
+  else p.reject(new Error(payload.error ?? '工具执行失败'))
+})
+
+app.whenReady().then(async () => {
+  const userData = app.getPath('userData')
+  await mkdir(userData, { recursive: true })
+  store = new ConfigStore(join(userData, 'config.json'))
+  await store.load()
+
+  const workspace = join(userData, 'workspace')
+  await mkdir(workspace, { recursive: true })
+  sceneStore = new SceneStore(workspace, agentsDoc())
+
+  // 自定义协议：gewu://workspace/<相对路径> 读取工作区资源
+  protocol.handle('gewu', async request => {
+    const url = new URL(request.url)
+    if (url.hostname === 'workspace') {
+      const rel = decodeURIComponent(url.pathname.replace(/^\//, ''))
+      const abs = join(workspace, rel)
+      if (!abs.startsWith(workspace)) return new Response('forbidden', { status: 403 })
+      const upstream = await net.fetch(pathToFileURL(abs).toString())
+      // 必须带 CORS 头，否则画布会被判为跨域污染
+      const headers = new Headers(upstream.headers)
+      headers.set('Access-Control-Allow-Origin', '*')
+      headers.set('Cache-Control', 'no-cache')
+      return new Response(upstream.body, { status: upstream.status, headers })
+    }
+    if (url.hostname === 'app') {
+      const rel = decodeURIComponent(url.pathname.replace(/^\//, ''))
+      return net.fetch(pathToFileURL(join(__dirname, '../renderer', rel)).toString())
+    }
+    return new Response('not found', { status: 404 })
+  })
+
+  await sceneStore.init()
+  wireBridge()
+  registerIpc({ store, sceneStore, bridge, getWindow: () => mainWindow })
+
+  await createWindow()
+  void bridge.start().catch(err => {
+    console.error('agent start failed', err)
+  })
+
+  // 开发调试：--prompt=... 直接发一条消息给 agent，--exit-after 结束后退出
+  // 加 --prompt-ui 会附带一份合成的编辑器上下文（时间/选中图层/选区），用于验证上下文注入
+  const promptArg = process.argv.find(a => a.startsWith('--prompt='))
+  if (promptArg) {
+    const text = promptArg.slice('--prompt='.length)
+    setTimeout(() => {
+      void (async () => {
+        try {
+          const ui = process.argv.includes('--prompt-ui')
+            ? {
+                time: 5.4,
+                selectedLayerId: (await sceneStore.read()).layers[1]?.id,
+                region: { x: 640, y: 320, w: 480, h: 260 }
+              }
+            : undefined
+          await bridge.prompt(text, ui)
+        } catch (error) {
+          console.error('[cli] prompt failed', error)
+        }
+        if (process.argv.includes('--exit-after')) setTimeout(() => app.quit(), 800)
+      })()
+    }, 1200)
+  }
+
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow() })
+})
+
+app.on('window-all-closed', () => {
+  void bridge?.stop()
+  if (process.platform !== 'darwin') {
+    app.quit()
+    // 子进程（DSH 运行时）有时不肯立刻退出，quit 会一直挂着。
+    // 给 3 秒体面时间，然后硬退。
+    setTimeout(() => app.exit(0), 3000)
+  }
+})
+
+app.on('before-quit', () => { void bridge?.stop() })

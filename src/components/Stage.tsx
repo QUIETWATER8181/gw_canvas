@@ -1,0 +1,300 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEditor } from '../state/editor'
+import type { Scene } from '../shared/scene'
+import { SceneRenderer, blitTo } from '../engine/preview'
+import { renderScene } from '../engine/render'
+import { assetImage } from '../engine/assets'
+import { Timeline } from './Timeline'
+import { StageToolbar } from './StageToolbar'
+
+interface Props {
+  onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
+  exportJob: { running: boolean; frame: number; total: number; phase: string } | null
+}
+
+export function Stage({ onToast, exportJob }: Props) {
+  const editor = useEditor()
+  const { scene, time, playing, selectedLayerId } = editor.state
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const rendererRef = useRef<SceneRenderer | null>(null)
+  const rafRef = useRef<number>(0)
+  const lastTs = useRef<number>(0)
+  const timeRef = useRef(time)
+  timeRef.current = time
+  const [showBounds, setShowBounds] = useState(true)
+  const [zoom, setZoom] = useState<'fit' | number>('fit')
+  const [selBox, setSelBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [drag, setDrag] = useState<{ sx: number; sy: number; x: number; y: number } | null>(null)
+  const [hoverLayer, setHoverLayer] = useState<string | null>(null)
+
+  if (!rendererRef.current) rendererRef.current = new SceneRenderer(scene.canvas.width, scene.canvas.height)
+
+  const renderNow = useCallback(() => {
+    const r = rendererRef.current
+    const c = canvasRef.current
+    if (!r || !c) return
+    r.render(scene, timeRef.current)
+    blitTo(c, r.element)
+  }, [scene])
+
+  // 播放循环
+  useEffect(() => {
+    if (!playing) {
+      renderNow()
+      return
+    }
+    lastTs.current = performance.now()
+    const tick = (now: number) => {
+      const dt = (now - lastTs.current) / 1000
+      lastTs.current = now
+      const next = timeRef.current + dt
+      if (next >= scene.canvas.duration) {
+        editor.setTime(0)
+      } else {
+        editor.setTime(next)
+      }
+      renderNow()
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [playing, editor, renderNow, scene.canvas.duration])
+
+  // 场景/时间变化时重绘（非播放状态）
+  useEffect(() => {
+    if (!playing) renderNow()
+  }, [time, scene, playing, renderNow])
+
+  // 场景里引用了新图片时，先等它加载完再重绘（否则第一帧是占位框）
+  useEffect(() => {
+    const r = rendererRef.current
+    if (!r) return
+    let alive = true
+    void r.prepare(scene).then(() => { if (alive) renderNow() })
+    return () => { alive = false }
+  }, [scene, renderNow])
+
+  // 窗口尺寸变化
+  useEffect(() => {
+    const ro = new ResizeObserver(() => { if (!playing) renderNow() })
+    if (wrapRef.current) ro.observe(wrapRef.current)
+    return () => ro.disconnect()
+  }, [playing, renderNow])
+
+  // 选中图层的包围盒
+  useEffect(() => {
+    const r = rendererRef.current
+    if (!r || !selectedLayerId || !showBounds) { setSelBox(null); return }
+    const layer = scene.layers.find(l => l.id === selectedLayerId)
+    if (!layer) { setSelBox(null); return }
+    const box = computeLayerBox(r, scene, layer.id, time)
+    setSelBox(box)
+  }, [selectedLayerId, scene, time, showBounds])
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const c = canvasRef.current
+    if (!c) return
+    const rect = c.getBoundingClientRect()
+    const scale = Math.min(rect.width / scene.canvas.width, rect.height / scene.canvas.height)
+    const dx = (rect.width - scene.canvas.width * scale) / 2
+    const dy = (rect.height - scene.canvas.height * scale) / 2
+    const x = (e.clientX - rect.left - dx) / scale
+    const y = (e.clientY - rect.top - dy) / scale
+    if (x < 0 || y < 0 || x > scene.canvas.width || y > scene.canvas.height) return
+    const hit = hitTest(rendererRef.current!, scene, x, y, time)
+    editor.select(hit)
+    if (!hit) onToast({ text: '没点到图层，可以框选一块区域让 AI 重画', kind: 'info' })
+  }
+
+  const regionSelection = drag && Math.abs(drag.x - drag.sx) > 12 && Math.abs(drag.y - drag.sy) > 12
+
+  function promptRegion() {
+    if (!drag) return
+    const x = Math.min(drag.sx, drag.x)
+    const y = Math.min(drag.sy, drag.y)
+    const w = Math.abs(drag.x - drag.sx)
+    const h = Math.abs(drag.y - drag.sy)
+    setDrag(null)
+    const text = `我框选了画面中的一块区域（设计坐标 x=${Math.round(x)}, y=${Math.round(y)}, w=${Math.round(w)}, h=${Math.round(h)}，时间 ${time.toFixed(1)}s）。\n` +
+      `请只修改这块区域对应的内容：先用 scene_inspect 和 scene_read 看现有图层，判断该区域由哪个图层负责，然后用 scene_set_layer 改写该图层的绘制代码（或新增一个覆盖该区域的图层）。\n` +
+      `不要改动区域之外的画面。改完用 scene_render_frame 渲染 ${time.toFixed(1)}s 自检。`
+    void window.gewu.sendPrompt(text, {
+      time,
+      selectedLayerId: editor.state.selectedLayerId ?? undefined,
+      region: { x, y, w, h }
+    })
+    onToast({ text: '已把选区发给 AI', kind: 'ok' })
+  }
+
+  return (
+    <main className="stage">
+      <StageToolbar
+        onToast={onToast}
+        showBounds={showBounds}
+        onToggleBounds={() => setShowBounds(v => !v)}
+        zoom={zoom}
+        onZoom={setZoom}
+        exportJob={exportJob}
+      />
+      <div className="stage-body" ref={wrapRef}>
+        <div className="stage-frame">
+          <canvas
+            ref={canvasRef}
+            className="stage-canvas"
+            onClick={handleCanvasClick}
+            onMouseDown={e => {
+              const p = toDesign(e, canvasRef.current!, scene.canvas.width, scene.canvas.height)
+              if (!p) return
+              setDrag({ sx: p.x, sy: p.y, x: p.x, y: p.y })
+            }}
+            onMouseMove={e => {
+              const p = toDesign(e, canvasRef.current!, scene.canvas.width, scene.canvas.height)
+              if (drag && p) setDrag({ ...drag, x: p.x, y: p.y })
+              if (p && !drag && rendererRef.current) {
+                const hit = hitTest(rendererRef.current, scene, p.x, p.y, time)
+                setHoverLayer(hit)
+              }
+            }}
+            onMouseUp={() => {
+              if (regionSelection) return
+              setDrag(null)
+            }}
+            onMouseLeave={() => { setDrag(null); setHoverLayer(null) }}
+            style={{ cursor: hoverLayer ? 'pointer' : 'crosshair' }}
+          />
+          {regionSelection && drag && (
+            <RegionOverlay drag={drag} sceneW={scene.canvas.width} sceneH={scene.canvas.height} canvasEl={canvasRef.current!} onConfirm={promptRegion} onCancel={() => setDrag(null)} />
+          )}
+          {selBox && !regionSelection && (
+            <div
+              className="sel-box"
+              style={boxStyle(selBox, scene.canvas.width, scene.canvas.height, canvasRef.current)}
+            >
+              <span className="sel-tag">{scene.layers.find(l => l.id === selectedLayerId)?.name ?? ''}</span>
+              <i className="h tl" /><i className="h tr" /><i className="h bl" /><i className="h br" />
+            </div>
+          )}
+        </div>
+      </div>
+      <Timeline />
+    </main>
+  )
+}
+
+function toDesign(e: React.MouseEvent, c: HTMLCanvasElement, w: number, h: number): { x: number; y: number } | null {
+  const rect = c.getBoundingClientRect()
+  const scale = Math.min(rect.width / w, rect.height / h)
+  const dx = (rect.width - w * scale) / 2
+  const dy = (rect.height - h * scale) / 2
+  const x = (e.clientX - rect.left - dx) / scale
+  const y = (e.clientY - rect.top - dy) / scale
+  if (x < 0 || y < 0 || x > w || y > h) return null
+  return { x, y }
+}
+
+function boxStyle(box: { x: number; y: number; w: number; h: number }, w: number, h: number, c: HTMLCanvasElement | null) {
+  if (!c) return {}
+  const rect = c.getBoundingClientRect()
+  const scale = Math.min(rect.width / w, rect.height / h)
+  const dx = (rect.width - w * scale) / 2
+  const dy = (rect.height - h * scale) / 2
+  return {
+    left: `${dx + box.x * scale}px`,
+    top: `${dy + box.y * scale}px`,
+    width: `${Math.max(2, box.w * scale)}px`,
+    height: `${Math.max(2, box.h * scale)}px`
+  }
+}
+
+/** 像素级命中测试：把每个图层单独画一遍，看点击点是否不透明 */
+function hitTest(renderer: SceneRenderer, scene: Scene, x: number, y: number, t: number): string | null {
+  const tmp = document.createElement('canvas')
+  tmp.width = 4
+  tmp.height = 4
+  const ctx = tmp.getContext('2d', { willReadFrequently: true })!
+  for (let i = scene.layers.length - 1; i >= 0; i--) {
+    const layer = scene.layers[i]
+    if (layer.visible === false) continue
+    if (layer.start !== undefined && t < layer.start) continue
+    if (layer.end !== undefined && t > layer.end) continue
+    ctx.clearRect(0, 0, 4, 4)
+    ctx.save()
+    const s = 4 / Math.max(scene.canvas.width, scene.canvas.height)
+    ctx.scale(s, s)
+    renderScene({
+      scene, ctx, width: scene.canvas.width, height: scene.canvas.height, t,
+      onlyLayerId: layer.id, drawBackground: false, onLayerError: () => undefined,
+      asset: assetImage
+    })
+    ctx.restore()
+    const px = Math.floor((x / scene.canvas.width) * 4)
+    const py = Math.floor((y / scene.canvas.height) * 4)
+    const a = ctx.getImageData(Math.min(3, Math.max(0, px)), Math.min(3, Math.max(0, py)), 1, 1).data[3]
+    if (a > 8) return layer.id
+    void renderer
+  }
+  return null
+}
+
+/** 计算图层内容的包围盒：低分辨率渲染 + alpha 扫描 */
+function computeLayerBox(renderer: SceneRenderer, scene: Scene, layerId: string, t: number) {
+  const W = 160
+  const H = Math.round((W * scene.canvas.height) / scene.canvas.width)
+  const tmp = document.createElement('canvas')
+  tmp.width = W
+  tmp.height = H
+  const ctx = tmp.getContext('2d', { willReadFrequently: true })!
+  ctx.clearRect(0, 0, W, H)
+  ctx.save()
+  ctx.scale(W / scene.canvas.width, H / scene.canvas.height)
+  renderScene({
+    scene, ctx, width: scene.canvas.width, height: scene.canvas.height, t,
+    onlyLayerId: layerId, drawBackground: false, onLayerError: () => undefined,
+    asset: assetImage
+  })
+  ctx.restore()
+  const data = ctx.getImageData(0, 0, W, H).data
+  let minX = W, minY = H, maxX = -1, maxY = -1
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (data[(y * W + x) * 4 + 3] > 8) {
+        if (x < minX) minX = x
+        if (y < minY) minY = y
+        if (x > maxX) maxX = x
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+  if (maxX < 0) return null
+  const sx = scene.canvas.width / W
+  const sy = scene.canvas.height / H
+  return { x: minX * sx, y: minY * sy, w: (maxX - minX + 1) * sx, h: (maxY - minY + 1) * sy }
+}
+
+function RegionOverlay({ drag, sceneW, sceneH, canvasEl, onConfirm, onCancel }: {
+  drag: { sx: number; sy: number; x: number; y: number }
+  sceneW: number
+  sceneH: number
+  canvasEl: HTMLCanvasElement
+  onConfirm(): void
+  onCancel(): void
+}) {
+  const rect = canvasEl.getBoundingClientRect()
+  const scale = Math.min(rect.width / sceneW, rect.height / sceneH)
+  const dx = (rect.width - sceneW * scale) / 2
+  const dy = (rect.height - sceneH * scale) / 2
+  const x = dx + Math.min(drag.sx, drag.x) * scale
+  const y = dy + Math.min(drag.sy, drag.y) * scale
+  const w = Math.abs(drag.x - drag.sx) * scale
+  const h = Math.abs(drag.y - drag.sy) * scale
+  return (
+    <>
+      <div className="region-box" style={{ left: x, top: y, width: w, height: h }} />
+      <div className="region-actions" style={{ left: x + w / 2, top: y + h + 10 }}>
+        <button className="btn primary sm" onClick={onConfirm}>让 AI 重画这块</button>
+        <button className="btn sm" onClick={onCancel}>取消</button>
+      </div>
+    </>
+  )
+}
