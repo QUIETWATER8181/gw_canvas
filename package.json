@@ -21,6 +21,7 @@
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^4.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

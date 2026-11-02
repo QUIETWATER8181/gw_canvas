@@ -1,0 +1,52 @@
+appId: com.gewu.video
+productName: Gewu
+copyright: 同济大学格物社
+
+directories:
+  output: dist
+  buildResources: build
+
+# 直接用 node_modules 里已经装好的 Electron，不再联网下载发行包。
+# （这台机器拉 GitHub / 镜像的 electron zip 都会卡在 0 字节，离线打包更可靠）
+electronDist: node_modules/.pnpm/electron@45.2.1/node_modules/electron/dist
+
+# 只把编译产物和运行期依赖打进 asar。
+# vendor/dsh-runtime（378MB）走 extraResources，必须是解包的真实文件：
+# 主进程要对它做 realpath，还要从里面 spawn node.exe。
+files:
+  - out/**
+  - package.json
+  - '!vendor/**'
+  - '!resources/**'
+  - '!docs/**'
+  - '!scripts/**'
+  - '!_*'
+  - '!*.mp4'
+
+extraResources:
+  # filter 必须显式写 **/*，否则 electron-builder 会把 node_modules 排除掉，
+  # 打出来的包里 dsh-runtime 只剩 6 个文件，agent 起不来。
+  - from: vendor/dsh-runtime
+    to: dsh-runtime
+    filter:
+      - '**/*'
+  - from: resources/AGENTS.md
+    to: AGENTS.md
+  - from: resources/gewu-tools.mjs
+    to: gewu-tools.mjs
+
+asar: true
+npmRebuild: false
+
+win:
+  target:
+    - dir
+  # 不签名、不改 exe 资源，省掉 winCodeSign 下载（内网/离线机器也能打）
+  signAndEditExecutable: false
+  executableName: Gewu
+
+# 打安装包时再放开：
+#   nsis:
+#     oneClick: false
+#     allowToChangeInstallationDirectory: true
+#     shortcutName: 格物 · 物理科普视频
