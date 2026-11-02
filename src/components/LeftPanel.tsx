@@ -49,6 +49,29 @@ export function LeftPanel({ onToast }: Props) {
     void window.gewu.sendPrompt(text).catch(e => onToast({ text: String(e), kind: 'err' }))
   }
 
+  const isAudio = (name: string) => /\.(mp3|wav|m4a|aac|ogg|flac|mp4|mov|webm)$/i.test(name)
+
+  function addAudio(a: { name: string; path: string }) {
+    const id = `vo_${Date.now().toString(36)}`
+    const start = Number(editor.state.time.toFixed(2))
+    editor.updateScene(
+      s => ({ ...s, audio: [...s.audio, { id, name: a.name, src: a.path, start, volume: 1 }] }),
+      { label: '加入音轨' }
+    )
+    onToast({ text: `已加到音轨，起点 ${start}s`, kind: 'ok' })
+  }
+
+  function patchAudio(id: string, patch: { start?: number; volume?: number }) {
+    editor.updateScene(
+      s => ({ ...s, audio: s.audio.map(t => (t.id === id ? { ...t, ...patch } : t)) }),
+      { label: '调整音轨' }
+    )
+  }
+
+  function removeAudio(id: string) {
+    editor.updateScene(s => ({ ...s, audio: s.audio.filter(t => t.id !== id) }), { label: '删除音轨' })
+  }
+
   function useRefImage(img: { name: string; path: string }) {
     sendPrompt(referencePrompt(img.name, img.path))
   }
@@ -112,23 +135,67 @@ export function LeftPanel({ onToast }: Props) {
         )}
 
         {tab === 'assets' && (
-          <div className="lp-section">
-            <div className="lp-section-head">
-              <span>工作区素材</span>
-              <button className="btn sm" onClick={() => void window.gewu.importAsset().then(() => { void refreshAssets(); onToast({ text: '已导入', kind: 'ok' }) }).catch(e => onToast({ text: String(e), kind: 'err' }))}>
-                导入
-              </button>
+          <>
+            <div className="lp-section">
+              <div className="lp-section-head">
+                <span>工作区素材</span>
+                <button className="btn sm" onClick={() => void window.gewu.importAsset().then(() => { void refreshAssets(); onToast({ text: '已导入', kind: 'ok' }) }).catch(e => onToast({ text: String(e), kind: 'err' }))}>
+                  导入
+                </button>
+              </div>
+              {assets.length === 0 && <div className="lp-empty">还没有素材。导入图片或音频后，agent 可以用 <code>asset()</code> 引用。</div>}
+              <div className="asset-grid">
+                {assets.map(a => (
+                  <div key={a.path} className="asset-card">
+                    <div className="asset-thumb" style={{ backgroundImage: /\.(png|jpe?g|webp|gif|svg)$/i.test(a.name) ? `url("gewu://workspace/${a.path}")` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+                    <div className="asset-name" title={a.name}>{a.name}</div>
+                    {isAudio(a.name) && (
+                      <button className="asset-add" onClick={() => addAudio(a)} title="加到音轨（从播放头开始）">＋音轨</button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-            {assets.length === 0 && <div className="lp-empty">还没有素材。导入图片或视频后，agent 可以用 <code>asset()</code> 引用。</div>}
-            <div className="asset-grid">
-              {assets.map(a => (
-                <div key={a.path} className="asset-card">
-                  <div className="asset-thumb" style={{ backgroundImage: /\.(png|jpe?g|webp|gif|svg)$/i.test(a.name) ? `url("gewu://workspace/${a.path}")` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
-                  <div className="asset-name" title={a.name}>{a.name}</div>
-                </div>
-              ))}
+
+            <div className="lp-section">
+              <div className="lp-section-head">
+                <span>音轨</span>
+                <span className="tiny muted">导出时混进 mp4</span>
+              </div>
+              {editor.state.scene.audio.length === 0 && (
+                <div className="lp-empty">还没有音轨。给素材点「＋音轨」加一条，或让 agent 调 <code>asset_import</code> 后自己写进场景。</div>
+              )}
+              <div className="track-list">
+                {editor.state.scene.audio.map(t => (
+                  <div key={t.id} className="track-row">
+                    <div className="track-top">
+                      <span className="track-name" title={t.src}>{t.name}</span>
+                      <button className="link" onClick={() => removeAudio(t.id)}>删除</button>
+                    </div>
+                    <div className="track-ctl">
+                      <label className="track-field">
+                        <span>起点</span>
+                        <input
+                          type="number" min={0} step={0.1} value={t.start}
+                          onChange={e => patchAudio(t.id, { start: Math.max(0, Number(e.target.value) || 0) })}
+                        />
+                        <span className="tiny muted">s</span>
+                      </label>
+                      <label className="track-field grow">
+                        <span>音量</span>
+                        <input
+                          type="range" min={0} max={1} step={0.01}
+                          value={t.volume ?? 1}
+                          onChange={e => patchAudio(t.id, { volume: Number(e.target.value) })}
+                        />
+                        <span className="tiny muted">{Math.round((t.volume ?? 1) * 100)}%</span>
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          </>
         )}
 
         {tab === 'images' && (

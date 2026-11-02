@@ -244,6 +244,33 @@
 .btn.block { width: 100%; justify-content: center; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
+/* 音轨 */
+.asset-add {
+  display: block;
+  width: 100%;
+  padding: 3px 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: .04em;
+  transition: background 120ms;
+}
+.asset-add:hover { background: rgba(79, 195, 217, .1); }
+.track-list { display: flex; flex-direction: column; gap: 7px; }
+.track-row { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 6px 8px; background: var(--bg-2); }
+.track-top { display: flex; align-items: center; gap: 8px; }
+.track-name { flex: 1; font-size: 11px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-ctl { display: flex; align-items: center; gap: 10px; margin-top: 5px; }
+.track-field { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--fg-4); }
+.track-field.grow { flex: 1; }
+.track-field input[type="number"] {
+  width: 46px; padding: 2px 5px;
+  border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg-1); color: var(--fg-1); font-size: 11px;
+}
+.track-field input[type="range"] { flex: 1; min-width: 40px; accent-color: var(--accent); }
+
 .lp-foot {
   flex: none;
   display: flex; align-items: center; justify-content: space-between;
