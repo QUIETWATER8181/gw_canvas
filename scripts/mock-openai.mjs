@@ -125,6 +125,8 @@ const CALLS = {
   inspect: { name: 'scene_inspect', args: {} },
   frame: { name: 'scene_render_frame', args: { t: 5 } },
   bad: { name: 'scene_write', args: { scene: BAD_SCENE } },
+  empty: { name: 'scene_write', args: { scene: { version: 1, meta: { title: '空场景' } } } },
+  emptyDraw: { name: 'scene_write', args: { scene: { version: 1, layers: [{ id: 'a', name: '空层' }] } } },
   img: { name: 'image_inspect', args: { path: 'assets/kf_a.png', cols: 48 } },
   cmp: { name: 'image_compare', args: { first: 'assets/kf_a.png', last: 'assets/kf_b.png' } },
   multi: { name: 'scene_render_frame', args: { times: [0.5, 6, 11.5] } },

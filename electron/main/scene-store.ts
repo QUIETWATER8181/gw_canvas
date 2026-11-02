@@ -26,7 +26,12 @@ export function normalizeScene(input: unknown): Scene {
     if (!l || typeof l !== 'object') continue
     const layer = l as SceneLayer
     let id = typeof layer.id === 'string' && ID_RE.test(layer.id) ? layer.id : `layer_${i + 1}`
-    while (seen.has(id)) id = `${id}_${Math.random().toString(36).slice(2, 5)}`
+    // 重复 id 用确定性后缀修复，别用 Math.random（同一份输入应该得到同一份输出）
+    if (seen.has(id)) {
+      let n = 2
+      while (seen.has(`${id}_${n}`)) n++
+      id = `${id}_${n}`
+    }
     seen.add(id)
     layers.push({
       id,

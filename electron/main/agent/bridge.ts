@@ -301,6 +301,18 @@ export class AgentBridge {
       const { normalizeScene, auditSceneInput } = await import('../scene-store')
       const warnings = auditSceneInput(scene)
       const normalized = normalizeScene(scene)
+      // 空场景几乎总是模型把参数写坏了（layers 拼错、只给了 meta……）。
+      // 直接写进去会清空用户正在编辑的内容，宁可拒绝并让它重来。
+      if (normalized.layers.length === 0) {
+        throw new Error(
+          'layers 为空，已拒绝写入，当前场景保持不变。' +
+          'scene_write 必须带一个非空的 layers 数组，每层至少要有 id 和 draw（函数体字符串）。' +
+          (warnings.length ? `\n检查结果：\n${warnings.map(w => `- ${w}`).join('\n')}` : '')
+        )
+      }
+      if (normalized.layers.every(l => !l.draw.trim())) {
+        throw new Error('所有图层的 draw 都是空的，已拒绝写入。至少给一层写绘制代码。')
+      }
       await writeFile(this.o.getScenePath(), JSON.stringify(normalized, null, 2), 'utf8')
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
       return { ok: true, layers: normalized.layers.length, duration: normalized.canvas.duration, warnings }
