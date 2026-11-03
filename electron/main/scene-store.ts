@@ -62,8 +62,21 @@ export function normalizeScene(input: unknown): Scene {
           .filter(s => s && typeof s.text === 'string')
           .slice(0, 500)
           .map(s => ({ id: String(s.id ?? Math.random().toString(36).slice(2, 8)), start: Number(s.start) || 0, end: Number(s.end) || 0, text: s.text.slice(0, 500) }))
-      : []
+      : [],
+    guides: normalizeGuides(raw.guides)
   }
+}
+
+/** 参考线：只保留有限数字，最多各 40 条；空的话不写进 scene.json */
+function normalizeGuides(input: unknown): Scene['guides'] {
+  if (!input || typeof input !== 'object') return undefined
+  const g = input as { v?: unknown; h?: unknown }
+  const pick = (arr: unknown): number[] => Array.isArray(arr)
+    ? arr.map(Number).filter(n => Number.isFinite(n)).slice(0, 40).map(n => Math.round(n * 100) / 100)
+    : []
+  const v = pick(g.v)
+  const h = pick(g.h)
+  return v.length || h.length ? { v, h } : undefined
 }
 
 function normalizeLayers(list: unknown[], seen: Set<string>, budget: { left: number }, depth: number): SceneLayer[] {

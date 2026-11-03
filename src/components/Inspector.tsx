@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SceneLayer } from '../shared/scene'
 import { KIND_LABEL, layerKind } from '../shared/scene'
 import { useEditor } from '../state/editor'
+import { ancestorsOf, findLayer } from '../shared/layers'
 import { compileLayer } from '../engine/render'
 import { API_REFERENCE } from '../content/api-reference'
 
@@ -24,6 +25,14 @@ export function Inspector({ layer }: Props) {
   }, [layer.id, layer.draw])
 
   const compiled = useMemo(() => compileLayer({ ...layer, draw: code }), [code, layer])
+
+  /** 这个元素所在的组合（时间会被它裁剪） */
+  const parent = useMemo(() => {
+    const hit = findLayer(editor.state.scene.layers, layer.id)
+    if (!hit) return null
+    const anc = ancestorsOf(editor.state.scene.layers, hit.path)
+    return anc.length ? anc[anc.length - 1] : null
+  }, [editor.state.scene.layers, layer.id])
 
   function applyCode() {
     editor.updateLayer(layer.id, { draw: code }, { label: '改绘制代码' })
@@ -281,6 +290,16 @@ export function Inspector({ layer }: Props) {
                   onChange={e => patch({ end: Number(e.target.value) }, '改结束时间')} />
               </div>
             </div>
+            {kind === 'group' && (
+              <div className="insp-hint">
+                组合会裁剪子元素的时间：拖组合整条时子元素一起移动；单独改子元素的起止，只在组合范围内看得见。
+              </div>
+            )}
+            {parent && (
+              <div className="insp-hint">
+                在组合「{parent.name}」里（{(parent.start ?? 0).toFixed(2)}–{(parent.end ?? duration).toFixed(2)}s），超出这段的画面不显示。
+              </div>
+            )}
           </div>
 
           <div className="insp-section">

@@ -488,6 +488,65 @@
 .snap-line.v { top: 0; bottom: 0; width: 1px; }
 .snap-line.h { left: 0; right: 0; height: 1px; }
 
+/* 标尺（从标尺拖出参考线） */
+.stage-ruler {
+  position: absolute; z-index: 5;
+  background: rgba(10, 14, 19, 0.86);
+  border: 1px solid var(--line-soft);
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  user-select: none;
+  overflow: hidden;
+}
+.stage-ruler.top { height: 16px; cursor: ns-resize; }
+.stage-ruler.left { width: 16px; cursor: ew-resize; }
+.stage-ruler .rk { position: absolute; }
+.stage-ruler.top .rk {
+  top: 0; bottom: 0;
+  border-left: 1px solid rgba(125, 139, 150, 0.45);
+  padding-left: 2px; line-height: 15px; white-space: nowrap;
+}
+.stage-ruler.top .rk.major { border-left-color: var(--fg-3); }
+.stage-ruler.left .rk { left: 0; right: 0; height: 1px; background: rgba(125, 139, 150, 0.45); }
+.stage-ruler.left .rk.major { background: var(--fg-3); }
+
+/* 用户参考线：拖动移动、双击删除 */
+.user-guide { position: absolute; z-index: 5; }
+.user-guide.v { width: 7px; margin-left: -3px; cursor: ew-resize; }
+.user-guide.v::after {
+  content: ''; position: absolute; left: 3px; top: 0; bottom: 0;
+  width: 1px; background: #38d0ff;
+}
+.user-guide.h { height: 7px; margin-top: -3px; cursor: ns-resize; }
+.user-guide.h::after {
+  content: ''; position: absolute; top: 3px; left: 0; right: 0;
+  height: 1px; background: #38d0ff;
+}
+.user-guide:hover::after { background: #8fe6ff; }
+.user-guide.draft::after { background: #ff5da2; }
+
+/* 多选对齐条 */
+.align-bar {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  z-index: 7;
+  display: flex; align-items: center; gap: 2px;
+  padding: 3px 5px;
+  background: rgba(10, 14, 19, 0.94);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+.align-bar-label { font-size: 10px; color: var(--fg-4); padding: 0 6px 0 2px; }
+.align-btn {
+  height: 22px; padding: 0 6px;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: var(--fg-3);
+  font-size: 10.5px; cursor: pointer;
+}
+.align-btn:hover { background: var(--bg-3); color: var(--fg); border-color: var(--line); }
+
 .marquee-box {
   position: absolute;
   border: 1px solid var(--accent);
@@ -676,6 +735,37 @@
 .tl-mini.on { color: var(--gold); }
 .tl-mini.off { color: var(--fg-5, #4a5560); }
 .tl-lane.drop-target { background: rgba(79, 195, 217, 0.09); box-shadow: inset 0 0 0 1px rgba(79, 195, 217, 0.35); }
+
+/* 时间轴框选 / 拖动气泡 / 被组合裁剪 */
+.tl-marquee {
+  position: absolute; z-index: 5;
+  border: 1px solid var(--accent);
+  background: rgba(79, 195, 217, 0.12);
+  pointer-events: none;
+}
+.tl-bubble {
+  position: absolute; top: 26px; transform: translateX(-50%);
+  padding: 1px 6px;
+  background: var(--bg-4);
+  border: 1px solid var(--accent-line);
+  border-radius: 3px;
+  color: var(--fg);
+  font-size: 10px; font-family: var(--font-mono);
+  white-space: nowrap; pointer-events: none; z-index: 6;
+}
+.tl-bar.clipped { border-style: dashed; }
+.tl-clip { flex: none; color: var(--gold); font-size: 10px; }
+
+/* 属性面板里的提示条（组合时间裁剪等） */
+.insp-hint {
+  margin-top: 6px;
+  padding: 5px 7px;
+  border-left: 2px solid var(--gold);
+  background: rgba(242, 181, 68, 0.07);
+  border-radius: 0 4px 4px 0;
+  font-size: 10.5px; line-height: 1.5;
+  color: var(--fg-3);
+}
 .tl-drop-line {
   position: absolute; top: 24px; bottom: 0; width: 2px; margin-left: -1px;
   background: var(--accent); pointer-events: none; z-index: 5;

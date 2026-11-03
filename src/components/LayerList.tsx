@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { SceneLayer } from '../shared/scene'
 import { KIND_LABEL, layerKind } from '../shared/scene'
 import { useEditor, newLayerId } from '../state/editor'
@@ -46,6 +46,14 @@ export function LayerList() {
     return map
   }, [rows, scene, renderer, editor.state.time])
 
+  // 从时间轴/画布选中时，把图层树里对应的行滚到可见处
+  useEffect(() => {
+    const id = selection[selection.length - 1]
+    if (!id) return
+    const el = document.querySelector(`.ll-item[data-id="${CSS.escape(id)}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [selection])
+
   function addLayer() {
     const id = newLayerId(scene)
     editor.addLayer({
@@ -71,6 +79,7 @@ export function LayerList() {
             <div
               key={layer.id}
               className={`ll-item ${sel ? 'sel' : ''} ${overPath === row.path.join('/') ? 'over' : ''}`}
+              data-id={layer.id}
               style={{ paddingLeft: `${6 + row.depth * 14}px` }}
               draggable
               onDragStart={e => { setDragPath(row.path.join('/')); e.dataTransfer.effectAllowed = 'move' }}
@@ -81,8 +90,14 @@ export function LayerList() {
                 e.preventDefault()
                 if (!dragPath) return
                 const from = dragPath.split('/')
-                // 拖到某行上 = 插到该行前面（同父级）
-                editor.moveTo(from[from.length - 1], row.parentPath.length ? row.parentPath[row.parentPath.length - 1] : null, row.index + 1)
+                const fromId = from[from.length - 1]
+                if (fromId === layer.id) { setDragPath(null); setOverPath(null); return }
+                // 拖到组合行上 = 变成它的子元素（坐标会换算，画面不跳）；否则插到目标的同级
+                if (row.hasChildren) {
+                  editor.moveTo(fromId, layer.id, (layer.children ?? []).length)
+                } else {
+                  editor.moveTo(fromId, row.parentPath.length ? row.parentPath[row.parentPath.length - 1] : null, row.index + 1)
+                }
                 setDragPath(null); setOverPath(null)
               }}
               onClick={e => {

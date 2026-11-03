@@ -128,6 +128,14 @@ export interface SceneMeta {
   style?: string
 }
 
+/** 用户自己拉的参考线（设计坐标）。只影响吸附和显示，不参与渲染、不进导出。 */
+export interface SceneGuides {
+  /** 竖参考线的 x */
+  v: number[]
+  /** 横参考线的 y */
+  h: number[]
+}
+
 export interface Scene {
   version: 1
   meta: SceneMeta
@@ -136,6 +144,7 @@ export interface Scene {
   layers: SceneLayer[]
   audio: SceneAudio[]
   subtitles: SceneSubtitle[]
+  guides?: SceneGuides
 }
 
 export const DEFAULT_THEME: SceneTheme = {

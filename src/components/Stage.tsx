@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '../state/editor'
-import type { Rect, Scene, SceneLayer } from '../shared/scene'
+import type { Rect, Scene, SceneGuides, SceneLayer } from '../shared/scene'
 import { hasOwnBox, layerKind } from '../shared/scene'
-import { ancestorsOf, findLayer, flatten, pathKey } from '../shared/layers'
+import { ancestorsOf, findLayer, flatten, pathKey, updateAt } from '../shared/layers'
 import { SceneRenderer, blitTo } from '../engine/preview'
 import { renderScene } from '../engine/render'
 import { assetImage } from '../engine/assets'
 import { Timeline, DRAG_MIME, dropAssetAt, readDragAsset } from './Timeline'
 import { StageToolbar } from './StageToolbar'
 import { ContextMenu, type MenuItem } from './ContextMenu'
+import { ALIGN_LABEL, computeAlign, type AlignMode } from './layer-ops'
 import {
   FIT_VIEW, designToScreen, normalizeRect, pointInTyped, rectsIntersect, screenToDesign,
   viewMath, worldBox, type ViewState
@@ -21,8 +22,31 @@ interface Props {
 
 const SNAP_PX = 6
 const MIN_SIZE = 8
+/** 标尺厚度（CSS px） */
+const RULER = 16
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const
 type Handle = typeof HANDLES[number]
+
+/** 多选时悬浮对齐条里的顺序（短标签，够宽就都放得下） */
+const ALIGN_BAR: { mode: AlignMode; text: string }[] = [
+  { mode: 'left', text: '左对齐' },
+  { mode: 'hcenter', text: '水平居中' },
+  { mode: 'right', text: '右对齐' },
+  { mode: 'top', text: '顶对齐' },
+  { mode: 'vcenter', text: '垂直居中' },
+  { mode: 'bottom', text: '底对齐' },
+  { mode: 'hdist', text: '水平等距' },
+  { mode: 'vdist', text: '垂直等距' }
+]
+
+/** 参考线/标尺用：把「设计坐标的步长」取成 1/2/5×10^n */
+function niceStep(raw: number): number {
+  const exp = Math.floor(Math.log10(Math.max(1e-6, raw)))
+  const base = Math.pow(10, exp)
+  const n = raw / base
+  const mult = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10
+  return mult * base
+}
 
 type Gesture =
   | { kind: 'move'; start: { x: number; y: number }; origin: { id: string; x: number; y: number }[]; box: Rect }
@@ -45,19 +69,24 @@ export function Stage({ onToast, exportJob }: Props) {
   const timeRef = useRef(time)
   timeRef.current = time
   const [showBounds, setShowBounds] = useState(true)
+  const [showRulers, setShowRulers] = useState(false)
   const [view, setView] = useState<ViewState>(FIT_VIEW)
   const [gesture, setGesture] = useState<Gesture | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
-  const [guides, setGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] })
-  const [menu, setMenu] = useState<{ x: number; y: number; id: string | null } | null>(null)
+  const [snapGuides, setSnapGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] })
+  /** 正在拖的参考线；index=-1 表示从标尺新建 */
+  const [guideDraft, setGuideDraft] = useState<{ axis: 'v' | 'h'; index: number; value: number } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string | null; at?: { x: number; y: number } } | null>(null)
   const [textEdit, setTextEdit] = useState<{ id: string; path: string[] } | null>(null)
   const [spaceDown, setSpaceDown] = useState(false)
-  const clipboard = useRef<SceneLayer[]>([])
 
   if (!rendererRef.current) rendererRef.current = new SceneRenderer(scene.canvas.width, scene.canvas.height)
 
   const viewRef = useRef(view)
   viewRef.current = view
+
+  /** 用户自己拉的参考线（存在 scene.guides 里，跟着草稿保存/撤销） */
+  const userGuides = scene.guides ?? { v: [], h: [] }
 
   const renderNow = useCallback(() => {
     const r = rendererRef.current
@@ -207,7 +236,7 @@ export function Stage({ onToast, exportJob }: Props) {
       if (p) {
         const hit = hitAt(p)
         if (hit) editor.select(hit.id)
-        setMenu({ x: e.clientX, y: e.clientY, id: hit?.id ?? (selection.length === 1 ? selection[0] : null) })
+        setMenu({ x: e.clientX, y: e.clientY, id: hit?.id ?? (selection.length === 1 ? selection[0] : null), at: p })
       }
       return
     }
@@ -321,10 +350,10 @@ export function Stage({ onToast, exportJob }: Props) {
       if (gesture.kind === 'move') {
         let dx = p.x - gesture.start.x
         let dy = p.y - gesture.start.y
-        const snap = computeSnap(scene, gesture.box, dx, dy, selection, scale())
+        const snap = computeSnap(scene, gesture.box, dx, dy, selection, scale(), userGuides)
         dx = snap.dx
         dy = snap.dy
-        setGuides(snap.guides)
+        setSnapGuides(snap.guides)
         for (const o of gesture.origin) {
           editor.updateLayer(o.id, { x: round2(o.x + dx), y: round2(o.y + dy) }, { label: '移动元素', mergeMs: 800 })
         }
@@ -398,7 +427,7 @@ export function Stage({ onToast, exportJob }: Props) {
         }
       }
       setGesture(null)
-      setGuides({ v: [], h: [] })
+      setSnapGuides({ v: [], h: [] })
     }
 
     window.addEventListener('pointermove', onMove)
@@ -408,6 +437,79 @@ export function Stage({ onToast, exportJob }: Props) {
       window.removeEventListener('pointerup', onUp)
     }
   }, [gesture, editor, scene, selection, time])
+
+  // ---------- 对齐 / 等间距 ----------
+  const applyAlign = useCallback((mode: AlignMode) => {
+    const patches = computeAlign(scene, selection, mode)
+    if (!patches.length) return
+    editor.updateScene(s => {
+      let layers = s.layers
+      for (const p of patches) {
+        const hit = findLayer(layers, p.id)
+        if (!hit) continue
+        layers = updateAt(layers, hit.path, {
+          x: round2((Number(hit.layer.x) || 0) + p.dx),
+          y: round2((Number(hit.layer.y) || 0) + p.dy)
+        })
+      }
+      return { ...s, layers }
+    }, { label: '对齐元素' })
+  }, [editor, scene, selection])
+
+  // ---------- 参考线 ----------
+  const toDesignClamped = useCallback((e: { clientX: number; clientY: number }) => {
+    const rect = rectOf()
+    if (!rect) return null
+    return screenToDesign(e.clientX, e.clientY, rect, scene.canvas.width, scene.canvas.height, viewRef.current, true)
+  }, [scene.canvas.height, scene.canvas.width])
+
+  const startGuideDrag = (e: React.PointerEvent, axis: 'v' | 'h', index: number) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const p = toDesignClamped(e)
+    if (!p) return
+    setGuideDraft({ axis, index, value: round2(axis === 'v' ? p.x : p.y) })
+  }
+
+  const commitGuide = useCallback((axis: 'v' | 'h', index: number, value: number) => {
+    const key = axis === 'v' ? 'v' : 'h'
+    const list = [...(userGuides[key] ?? [])]
+    if (index >= 0 && index < list.length) list[index] = value
+    else list.push(value)
+    editor.setGuides({ ...userGuides, [key]: list })
+  }, [editor, userGuides])
+
+  const removeGuide = useCallback((axis: 'v' | 'h', index: number) => {
+    const key = axis === 'v' ? 'v' : 'h'
+    const list = [...(userGuides[key] ?? [])]
+    list.splice(index, 1)
+    editor.setGuides({ ...userGuides, [key]: list })
+  }, [editor, userGuides])
+
+  useEffect(() => {
+    if (!guideDraft) return
+    const move = (e: PointerEvent) => {
+      const p = toDesignClamped(e)
+      if (!p) return
+      setGuideDraft(d => (d ? { ...d, value: round2(d.axis === 'v' ? p.x : p.y) } : d))
+    }
+    const up = () => {
+      commitGuide(guideDraft.axis, guideDraft.index, guideDraft.value)
+      setGuideDraft(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+  }, [guideDraft, toDesignClamped, commitGuide])
+
+  function addGuideAt(axis: 'v' | 'h') {
+    const at = menu?.at
+    if (!at) return
+    commitGuide(axis, -1, round2(axis === 'v' ? at.x : at.y))
+  }
 
   // 滚轮：Ctrl 缩放，否则平移
   const onWheel = (e: React.WheelEvent) => {
@@ -483,24 +585,7 @@ export function Stage({ onToast, exportJob }: Props) {
       for (const id of selection) editor.reorder(id, dir as -1 | 1)
       return
     }
-    if (mod && e.key.toLowerCase() === 'c') {
-      clipboard.current = selection.map(id => findLayer(scene.layers, id)?.layer).filter((l): l is SceneLayer => Boolean(l))
-      if (clipboard.current.length) onToast({ text: `已复制 ${clipboard.current.length} 个元素`, kind: 'info' })
-      return
-    }
-    if (mod && e.key.toLowerCase() === 'v') {
-      e.preventDefault()
-      if (!clipboard.current.length) return
-      // 简单粘贴：复制一份到根层级
-      for (const l of clipboard.current) {
-        const copy = JSON.parse(JSON.stringify(l)) as SceneLayer
-        copy.id = `${l.id}_paste_${Date.now().toString(36).slice(-4)}`
-        copy.name = `${l.name} 副本`
-        copy.x = (Number(copy.x) || 0) + 24
-        copy.y = (Number(copy.y) || 0) + 24
-        editor.addLayer(copy)
-      }
-    }
+    // 复制/粘贴在 editor.ts 的全局快捷键里统一处理（画布聚焦也生效）
   }
 
   // ---------- 菜单 ----------
@@ -516,6 +601,13 @@ export function Stage({ onToast, exportJob }: Props) {
       { id: 'group', label: '组合', hint: 'Ctrl+G', disabled: selection.length < 2, onClick: () => { if (editor.group(selection)) onToast({ text: '已组合', kind: 'ok' }) } },
       { id: 'ungroup', label: '解组', hint: 'Ctrl+Shift+G', disabled: !isGroup, onClick: () => { if (id) editor.ungroup(id) } },
       { id: 's2', label: '', separator: true },
+      ...ALIGN_BAR.map(a => ({
+        id: `align-${a.mode}`,
+        label: a.text,
+        disabled: selection.length < 2,
+        onClick: () => applyAlign(a.mode)
+      })),
+      { id: 's2b', label: '', separator: true },
       { id: 'front', label: '上移一层', hint: 'Ctrl+]', disabled: !selection.length, onClick: () => selection.forEach(s => editor.reorder(s, 1)) },
       { id: 'back', label: '下移一层', hint: 'Ctrl+[', disabled: !selection.length, onClick: () => selection.forEach(s => editor.reorder(s, -1)) },
       { id: 's3', label: '', separator: true },
@@ -540,7 +632,15 @@ export function Stage({ onToast, exportJob }: Props) {
           )
           onToast({ text: '已把这个元素发给 AI', kind: 'ok' })
         }
-      }
+      },
+      { id: 's5', label: '', separator: true },
+      { id: 'guide-v', label: '在此加竖参考线', disabled: !menu?.at, onClick: () => addGuideAt('v') },
+      { id: 'guide-h', label: '在此加横参考线', disabled: !menu?.at, onClick: () => addGuideAt('h') },
+      {
+        id: 'guide-clear', label: '清除参考线', disabled: !(userGuides.v.length || userGuides.h.length),
+        onClick: () => editor.setGuides({ v: [], h: [] })
+      },
+      { id: 'ruler', label: showRulers ? '隐藏标尺' : '显示标尺', onClick: () => setShowRulers(v => !v) }
     ]
   }
 
@@ -555,6 +655,8 @@ export function Stage({ onToast, exportJob }: Props) {
         onToast={onToast}
         showBounds={showBounds}
         onToggleBounds={() => setShowBounds(v => !v)}
+        showRulers={showRulers}
+        onToggleRulers={() => setShowRulers(v => !v)}
         zoom={view.zoom}
         onZoom={z => setView(v => ({ ...v, zoom: z, panX: 0, panY: 0 }))}
         exportJob={exportJob}
@@ -614,9 +716,87 @@ export function Stage({ onToast, exportJob }: Props) {
             </div>
           ))}
 
+          {/* 标尺 / 用户参考线 */}
+          {rect && (() => {
+            const m = viewMath(rect.width, rect.height, scene.canvas.width, scene.canvas.height, view)
+            const step = niceStep(64 / m.scale)
+            const xs: number[] = []
+            for (let x = 0; x <= scene.canvas.width + 1e-6; x += step) xs.push(Math.round(x * 100) / 100)
+            const ys: number[] = []
+            for (let y = 0; y <= scene.canvas.height + 1e-6; y += step) ys.push(Math.round(y * 100) / 100)
+            const draft = guideDraft
+            return (
+              <>
+                {showRulers && (
+                  <>
+                    <div
+                      className="stage-ruler top"
+                      style={{ left: `${m.dx}px`, top: `${Math.max(0, m.dy - RULER)}px`, width: `${m.dw}px` }}
+                      onPointerDown={e => startGuideDrag(e, 'h', -1)}
+                      title="从标尺往下拖，拉出横参考线"
+                    >
+                      {xs.map((x, i) => (
+                        <span key={x} className={`rk ${i % 5 === 0 ? 'major' : ''}`} style={{ left: `${x * m.scale}px` }}>
+                          {i % 5 === 0 ? Math.round(x) : ''}
+                        </span>
+                      ))}
+                    </div>
+                    <div
+                      className="stage-ruler left"
+                      style={{ left: `${Math.max(0, m.dx - RULER)}px`, top: `${m.dy}px`, height: `${m.dh}px` }}
+                      onPointerDown={e => startGuideDrag(e, 'v', -1)}
+                      title="从标尺往右拖，拉出竖参考线"
+                    >
+                      {ys.map((y, i) => (
+                        <span key={y} className={`rk ${i % 5 === 0 ? 'major' : ''}`} style={{ top: `${y * m.scale}px` }} />
+                      ))}
+                    </div>
+                  </>
+                )}
+                {userGuides.v.map((x, i) => (
+                  <div
+                    key={`gv${i}`}
+                    className="user-guide v"
+                    style={{ left: `${m.dx + x * m.scale}px`, top: `${m.dy}px`, height: `${m.dh}px` }}
+                    onPointerDown={e => startGuideDrag(e, 'v', i)}
+                    onDoubleClick={() => removeGuide('v', i)}
+                    title={`竖参考线 x=${Math.round(x)} · 拖动移动 / 双击删除`}
+                  />
+                ))}
+                {userGuides.h.map((y, i) => (
+                  <div
+                    key={`gh${i}`}
+                    className="user-guide h"
+                    style={{ top: `${m.dy + y * m.scale}px`, left: `${m.dx}px`, width: `${m.dw}px` }}
+                    onPointerDown={e => startGuideDrag(e, 'h', i)}
+                    onDoubleClick={() => removeGuide('h', i)}
+                    title={`横参考线 y=${Math.round(y)} · 拖动移动 / 双击删除`}
+                  />
+                ))}
+                {draft && (draft.axis === 'v' ? (
+                  <div className="user-guide v draft" style={{ left: `${m.dx + draft.value * m.scale}px`, top: `${m.dy}px`, height: `${m.dh}px` }} />
+                ) : (
+                  <div className="user-guide h draft" style={{ top: `${m.dy + draft.value * m.scale}px`, left: `${m.dx}px`, width: `${m.dw}px` }} />
+                ))}
+              </>
+            )
+          })()}
+
           {/* 吸附参考线 */}
-          {guides.v.map(x => <div key={`v${x}`} className="snap-line v" style={{ left: `${screenX(x, rect, scene.canvas.width, scene.canvas.height, view)}px` }} />)}
-          {guides.h.map(y => <div key={`h${y}`} className="snap-line h" style={{ top: `${screenY(y, rect, scene.canvas.width, scene.canvas.height, view)}px` }} />)}
+          {snapGuides.v.map(x => <div key={`v${x}`} className="snap-line v" style={{ left: `${screenX(x, rect, scene.canvas.width, scene.canvas.height, view)}px` }} />)}
+          {snapGuides.h.map(y => <div key={`h${y}`} className="snap-line h" style={{ top: `${screenY(y, rect, scene.canvas.width, scene.canvas.height, view)}px` }} />)}
+
+          {/* 多选对齐条 */}
+          {selection.length > 1 && boxes.length > 1 && (
+            <div className="align-bar" role="toolbar" aria-label="对齐与分布">
+              <span className="align-bar-label">{selection.length} 个元素</span>
+              {ALIGN_BAR.map(a => (
+                <button key={a.mode} className="align-btn" data-align={a.mode} onClick={() => applyAlign(a.mode)} title={ALIGN_LABEL[a.mode]}>
+                  {a.text}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* 框选 */}
           {marquee && <div className="marquee-box" style={rectCss(marquee, rect, scene.canvas.width, scene.canvas.height, view)} />}
@@ -883,13 +1063,13 @@ function scanBox(scene: Scene, path: string[], t: number): Rect | null {
   return { x: minX * sx, y: minY * sy, w: (maxX - minX + 1) * sx, h: (maxY - minY + 1) * sy }
 }
 
-/** 移动时的吸附：画布边缘/中心 + 其它元素边缘，返回修正后的位移和参考线 */
-function computeSnap(scene: Scene, moving: Rect, dx: number, dy: number, selection: string[], scale: number): { dx: number; dy: number; guides: { v: number[]; h: number[] } } {
+/** 移动时的吸附：画布边缘/中心 + 用户参考线 + 其它元素边缘，返回修正后的位移和参考线 */
+function computeSnap(scene: Scene, moving: Rect, dx: number, dy: number, selection: string[], scale: number, userGuides?: { v: number[]; h: number[] }): { dx: number; dy: number; guides: { v: number[]; h: number[] } } {
   const tol = SNAP_PX / Math.max(0.05, scale)
   const W = scene.canvas.width
   const H = scene.canvas.height
-  const targetsX = [0, W / 2, W]
-  const targetsY = [0, H / 2, H]
+  const targetsX = [0, W / 2, W, ...(userGuides?.v ?? [])]
+  const targetsY = [0, H / 2, H, ...(userGuides?.h ?? [])]
   for (const f of flatten(scene.layers)) {
     if (selection.includes(f.layer.id)) continue
     const anc = ancestorsOf(scene.layers, f.path)

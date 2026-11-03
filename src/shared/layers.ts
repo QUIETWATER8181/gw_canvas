@@ -191,10 +191,10 @@ export function countLayers(layers: SceneLayer[]): number {
   return n
 }
 
-/** 深拷贝一棵子树，并给所有节点换新 id */
-export function cloneTree(layer: SceneLayer, makeId: () => string): SceneLayer {
+/** 深拷贝一棵子树，并给所有节点换新 id（回调会收到旧 id，方便建映射） */
+export function cloneTree(layer: SceneLayer, makeId: (oldId?: string) => string): SceneLayer {
   const copy: SceneLayer = JSON.parse(JSON.stringify(layer))
-  copy.id = makeId()
+  copy.id = makeId(layer.id)
   copy.children = copy.children?.map(kid => cloneTree(kid, makeId))
   return copy
 }

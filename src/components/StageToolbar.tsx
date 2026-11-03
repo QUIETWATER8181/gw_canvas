@@ -4,12 +4,14 @@ interface Props {
   onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
   showBounds: boolean
   onToggleBounds(): void
+  showRulers: boolean
+  onToggleRulers(): void
   zoom: number
   onZoom(z: number): void
   exportJob: { running: boolean; frame: number; total: number; phase: string } | null
 }
 
-export function StageToolbar({ showBounds, onToggleBounds, zoom, onZoom, exportJob }: Props) {
+export function StageToolbar({ showBounds, onToggleBounds, showRulers, onToggleRulers, zoom, onZoom, exportJob }: Props) {
   const editor = useEditor()
   const { scene, saving, dirty } = editor.state
   return (
@@ -34,6 +36,10 @@ export function StageToolbar({ showBounds, onToggleBounds, zoom, onZoom, exportJ
         <button className={`tb-chip ${showBounds ? 'on' : ''}`} onClick={onToggleBounds} title="显示选中图层的边界">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M9 9h6v6H9z" /></svg>
           边界
+        </button>
+        <button className={`tb-chip ${showRulers ? 'on' : ''}`} onClick={onToggleRulers} title="标尺：从标尺拖出参考线，参考线会吸附并跟着草稿保存">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 4h18v4H3zM6 8v5M10 8v3M14 8v5M18 8v3" /></svg>
+          标尺
         </button>
         <div className="zoom-group">
           <button className={`tb-chip ${Math.abs(zoom - 1) < 0.01 ? 'on' : ''}`} onClick={() => onZoom(1)}>适应</button>

@@ -67,11 +67,27 @@ interface Row {
   /** 起始/结束时间 */
   start: number
   end: number
+  /** 所在组合的时间范围（子元素用；组合会裁剪它） */
+  parentRange?: { start: number; end: number }
+  /** 子元素的时间超出组合范围 = 被裁剪 */
+  clipped?: boolean
 }
 
 type DragInfo =
-  | { mode: 'move' | 'l' | 'r'; row: Row; startX: number; origStart: number; origEnd: number; groupChildren?: { id: string; start: number; end: number }[] }
+  | { mode: 'move' | 'l' | 'r'; row: Row; startX: number; origStart: number; origEnd: number; curStart: number; curEnd: number; groupChildren?: { id: string; start: number; end: number }[] }
   | null
+
+interface LaneSel {
+  /** 起点（client 坐标） */
+  ox: number
+  oy: number
+  cx: number
+  cy: number
+  /** .tl-tracks 的原点（client 坐标），用来换算成容器内坐标 */
+  left: number
+  top: number
+  active: boolean
+}
 
 export function Timeline() {
   const editor = useEditor()
@@ -87,6 +103,7 @@ export function Timeline() {
   const [scrubbing, setScrubbing] = useState(false)
   const [drag, setDrag] = useState<DragInfo>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [laneSel, setLaneSel] = useState<LaneSel | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; row: Row } | null>(null)
   const [dropAt, setDropAt] = useState<{ key: string; time: number } | null>(null)
 
@@ -140,10 +157,17 @@ export function Timeline() {
   /** 统一的行模型：图层（含嵌套）→ 音频 → 字幕 */
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = []
-    const walk = (layers: SceneLayer[], depth: number) => {
+    const walk = (layers: SceneLayer[], depth: number, range?: { start: number; end: number }) => {
       for (const layer of layers) {
         const isCollapsed = collapsed.has(layer.id)
         const kids = layer.children ?? []
+        const start = layer.start ?? range?.start ?? 0
+        const end = layer.end ?? range?.end ?? duration
+        // 子元素自己写了超出组合的起止 → 会被组合裁剪，界面上要提示
+        const clipped = Boolean(range) && (
+          (layer.start !== undefined && layer.start < (range as { start: number }).start) ||
+          (layer.end !== undefined && layer.end > (range as { end: number }).end)
+        )
         out.push({
           key: `layer:${layer.id}`,
           kind: 'layer',
@@ -153,10 +177,12 @@ export function Timeline() {
           hasChildren: kids.length > 0,
           collapsed: isCollapsed,
           layer,
-          start: layer.start ?? 0,
-          end: layer.end ?? duration
+          start,
+          end,
+          parentRange: range,
+          clipped
         })
-        if (kids.length && !isCollapsed) walk(kids, depth + 1)
+        if (kids.length && !isCollapsed) walk(kids, depth + 1, { start, end })
       }
     }
     walk(scene.layers, 0)
@@ -236,23 +262,38 @@ export function Timeline() {
     } else {
       editor.select(null)
     }
-    const ids = row.kind === 'layer'
-      ? (additive ? [...new Set([...selection, row.id])] : selection.includes(row.id) ? selection : [row.id])
-      : []
     // 组合：拖动整条时同步移动所有子元素的起止时间
     let groupChildren: { id: string; start: number; end: number }[] | undefined
     if (row.layer?.children?.length) {
-      groupChildren = []
+      const list: { id: string; start: number; end: number }[] = []
       const collect = (l: SceneLayer) => {
         for (const k of l.children ?? []) {
           if (k.children?.length) collect(k)
-          else groupChildren!.push({ id: k.id, start: k.start ?? 0, end: k.end ?? duration })
+          else list.push({ id: k.id, start: k.start ?? 0, end: k.end ?? duration })
         }
       }
       collect(row.layer)
+      groupChildren = list
     }
-    void ids
-    setDrag({ mode, row, startX: e.clientX, origStart: row.start, origEnd: row.end, groupChildren })
+    let target = row
+    // Alt+拖 = 先复制一条再拖复制体（原剪辑块留在原地）
+    if (e.altKey && mode === 'move' && row.kind === 'layer') {
+      const { created, map } = editor.duplicate([row.id])
+      if (created.length) {
+        target = { ...row, id: created[0], key: `layer:${created[0]}`, name: `${row.name} 副本`, layer: { ...(row.layer as SceneLayer), id: created[0] } }
+        if (groupChildren) groupChildren = groupChildren.map(k => ({ ...k, id: map[k.id] ?? k.id }))
+      }
+    }
+    setDrag({
+      mode,
+      row: target,
+      startX: e.clientX,
+      origStart: target.start,
+      origEnd: target.end,
+      curStart: target.start,
+      curEnd: target.end,
+      groupChildren
+    })
   }
 
   useEffect(() => {
@@ -307,6 +348,8 @@ export function Timeline() {
           subtitles: (sc.subtitles ?? []).map(x => (x.id === row.id ? { ...x, start: s, end: en } : x))
         }), { label: '调整字幕时间', mergeMs: 600 })
       }
+      // 拖动时间气泡：显示当前起止
+      setDrag(prev => (prev && (prev.curStart !== s || prev.curEnd !== en) ? { ...prev, curStart: s, curEnd: en } : prev))
     }
     const up = () => setDrag(null)
     window.addEventListener('mousemove', move)
@@ -316,6 +359,68 @@ export function Timeline() {
       window.removeEventListener('mouseup', up)
     }
   }, [drag, editor, rows])
+
+  /** 空白轨道区：拖 = 框选剪辑块，单击 = 移动播放头 */
+  function onLaneMouseDown(e: React.MouseEvent) {
+    if (e.button !== 0) return
+    if ((e.target as HTMLElement).closest('.tl-bar')) return
+    e.preventDefault()
+    const tracks = (e.currentTarget as HTMLElement).closest('.tl-tracks') as HTMLElement | null
+    const rect = tracks?.getBoundingClientRect()
+    setLaneSel({
+      ox: e.clientX,
+      oy: e.clientY,
+      cx: e.clientX,
+      cy: e.clientY,
+      left: rect?.left ?? 0,
+      top: rect?.top ?? 0,
+      active: false
+    })
+  }
+
+  useEffect(() => {
+    if (!laneSel) return
+    const move = (e: MouseEvent) => {
+      setLaneSel(prev => {
+        if (!prev) return prev
+        const active = prev.active || Math.abs(e.clientX - prev.ox) > 4 || Math.abs(e.clientY - prev.oy) > 4
+        return { ...prev, cx: e.clientX, cy: e.clientY, active }
+      })
+    }
+    const up = (e: MouseEvent) => {
+      const sel = laneSel
+      setLaneSel(null)
+      if (!sel.active) {
+        seekFromMouse(e.clientX)
+        return
+      }
+      const box = {
+        x1: Math.min(sel.ox, e.clientX),
+        x2: Math.max(sel.ox, e.clientX),
+        y1: Math.min(sel.oy, e.clientY),
+        y2: Math.max(sel.oy, e.clientY)
+      }
+      const ids: string[] = []
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('.tl-track'))) {
+        const id = el.dataset.id
+        if (!id || el.dataset.kind !== 'layer') continue
+        const r = el.getBoundingClientRect()
+        if (r.left < box.x2 && r.right > box.x1 && r.top < box.y2 && r.bottom > box.y1) ids.push(id)
+      }
+      if (!ids.length) {
+        if (!e.ctrlKey && !e.metaKey) editor.select(null)
+        return
+      }
+      const merged = e.ctrlKey || e.metaKey ? [...new Set([...selectionRef.current, ...ids])] : ids
+      editor.selectMany(merged)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+  }, [laneSel, editor])
 
   /** 素材拖到轨道上 → 在该时间点创建元素 */
   const onDrop = useCallback(async (e: React.DragEvent, row: Row | null) => {
@@ -454,6 +559,8 @@ export function Timeline() {
               <div
                 key={row.key}
                 className={`tl-track ${sel ? 'sel' : ''} ${row.kind !== 'layer' ? 'other' : ''} ${row.layer?.visible === false ? 'off' : ''}`}
+                data-id={row.kind === 'layer' ? row.id : undefined}
+                data-kind={row.kind}
                 style={{ ['--depth' as string]: row.depth }}
               >
                 <div
@@ -481,6 +588,9 @@ export function Timeline() {
                   ) : <span className="tl-chev-space" />}
                   <KindIcon kind={kind} />
                   <span className="tl-name-text">{row.name}</span>
+                  {row.clipped && (
+                    <span className="tl-clip" title={`被组合 ${row.parentRange?.start.toFixed(2)}–${row.parentRange?.end.toFixed(2)}s 裁剪`}>✂</span>
+                  )}
                   {row.kind === 'layer' && (
                     <span className="tl-row-tools">
                       <button
@@ -503,7 +613,7 @@ export function Timeline() {
                 <div
                   className={`tl-lane ${dropAt?.key === row.key ? 'drop-target' : ''}`}
                   style={{ width: `${laneW + END_PAD}px` }}
-                  onMouseDown={onScrubMouseDown}
+                  onMouseDown={onLaneMouseDown}
                   onDragOver={e => {
                     if (!e.dataTransfer.types.includes(DRAG_MIME)) return
                     e.preventDefault()
@@ -515,9 +625,17 @@ export function Timeline() {
                   onDrop={e => { void onDrop(e, row) }}
                 >
                   <div
-                    className={`tl-bar kind-${kind} ${sel ? 'sel' : ''} ${drag?.row.key === row.key ? 'dragging' : ''}`}
+                    className={`tl-bar kind-${kind} ${sel ? 'sel' : ''} ${row.clipped ? 'clipped' : ''} ${drag?.row.key === row.key ? 'dragging' : ''}`}
                     style={{ left: `${xOf(row.start)}px`, width: `${Math.max(8, len * pps)}px` }}
                     onMouseDown={e => onBarMouseDown(e, row, 'move')}
+                    onDoubleClick={e => {
+                      // 双击剪辑块 = 选中这个元素并把播放头挪到它开头
+                      e.stopPropagation()
+                      if (row.kind === 'layer') {
+                        editor.select(row.id)
+                        editor.setTime(row.start)
+                      }
+                    }}
                     onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, row }) }}
                     title={`${row.name} · ${row.start.toFixed(2)}–${row.end.toFixed(2)}s`}
                   >
@@ -531,6 +649,24 @@ export function Timeline() {
               </div>
             )
           })}
+
+          {laneSel?.active && (
+            <div
+              className="tl-marquee"
+              style={{
+                left: `${Math.min(laneSel.ox, laneSel.cx) - laneSel.left}px`,
+                top: `${Math.min(laneSel.oy, laneSel.cy) - laneSel.top}px`,
+                width: `${Math.abs(laneSel.cx - laneSel.ox)}px`,
+                height: `${Math.abs(laneSel.cy - laneSel.oy)}px`
+              }}
+            />
+          )}
+
+          {drag && (
+            <div className="tl-bubble" style={{ left: `${NAME_W + xOf(Math.min(drag.curStart, drag.curEnd))}px` }}>
+              {drag.curStart.toFixed(2)} – {drag.curEnd.toFixed(2)}s
+            </div>
+          )}
 
           <div className="tl-playhead-line" style={{ left: `${NAME_W + xOf(time)}px` }}>
             {scrubbing && <span className="tl-scrubbie">{fmtTimecode(time, fps)}</span>}
