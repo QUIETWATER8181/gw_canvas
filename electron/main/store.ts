@@ -51,6 +51,8 @@ const DEFAULT_CONFIG: ConfigFile = { version: 1, connections: [], activeConnecti
 
 export class ConfigStore {
   private data: ConfigFile = { ...DEFAULT_CONFIG }
+  /** 文件存在但读坏了：这时千万别自动回写，否则把用户还能救的 Key 覆盖成空 */
+  private loadFailed = false
 
   constructor(private readonly file: string) {}
 
@@ -62,6 +64,7 @@ export class ConfigStore {
       const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as ConfigFile
       if (parsed?.version === 1) this.data = { ...DEFAULT_CONFIG, ...parsed }
     } catch (error) {
+      this.loadFailed = true
       // 别静默吞掉：留一份坏文件副本，下次能查为什么「配置没了」
       try {
         const { copyFile } = await import('node:fs/promises')
@@ -88,6 +91,8 @@ export class ConfigStore {
 
   /** 退出前兜底：把最后一次改动同步落盘，别丢在 promise 链里 */
   flushSync(): void {
+    // 读坏过、而且用户也没重新填连接 → 不要用空配置盖掉原文件（里面还有能救的 Key）
+    if (this.loadFailed && this.data.connections.length === 0) return
     try {
       atomicWriteSync(this.file, JSON.stringify(this.data, null, 2))
     } catch { /* ignore */ }
