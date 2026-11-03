@@ -12,15 +12,15 @@ export interface EditorState {
   lastSavedAt: number | null
 }
 
-interface HistoryEntry { scene: Scene; label: string }
+interface HistoryEntry { scene: Scene; label: string; at: number }
 
 export interface EditorApi {
   state: EditorState
   select(id: string | null): void
   setTime(t: number): void
   setPlaying(p: boolean): void
-  updateScene(updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean }): void
-  updateLayer(id: string, patch: Partial<SceneLayer>, opts?: { label?: string }): void
+  updateScene(updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean; mergeMs?: number }): void
+  updateLayer(id: string, patch: Partial<SceneLayer>, opts?: { label?: string; mergeMs?: number }): void
   addLayer(layer: SceneLayer): void
   removeLayer(id: string): void
   reorderLayer(from: number, to: number): void
@@ -58,6 +58,8 @@ export function useEditorState(initial: Scene): EditorApi {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sceneRef = useRef(scene)
   sceneRef.current = scene
+  const timeRef = useRef(time)
+  timeRef.current = time
   /** agent 一轮里可能连续改好几次，合并成一条撤销记录 */
   const aiEditAt = useRef(0)
 
@@ -83,12 +85,21 @@ export function useEditorState(initial: Scene): EditorApi {
     saveTimer.current = setTimeout(() => { void persist(s) }, 600)
   }, [persist])
 
-  const updateScene = useCallback((updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean }) => {
+  const updateScene = useCallback((updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean; mergeMs?: number }) => {
     setScene(prev => {
       const next = updater(prev)
       if (next === prev) return prev
-      undoStack.current.push({ scene: prev, label: opts?.label ?? '编辑' })
-      if (undoStack.current.length > 80) undoStack.current.shift()
+      const label = opts?.label ?? '编辑'
+      const now = Date.now()
+      // 同一次连续操作（如拖拽剪辑块）合并成一条撤销记录：
+      // 保留第一次快照（拖拽开始前的值），只刷新时间戳。
+      const last = undoStack.current[undoStack.current.length - 1]
+      if (last && opts?.mergeMs && last.label === label && now - last.at < opts.mergeMs) {
+        last.at = now
+      } else {
+        undoStack.current.push({ scene: prev, label, at: now })
+        if (undoStack.current.length > 80) undoStack.current.shift()
+      }
       redoStack.current = []
       refreshFlags()
       if (opts?.persist !== false) scheduleSave(next)
@@ -103,7 +114,7 @@ export function useEditorState(initial: Scene): EditorApi {
     aiEditAt.current = isAi ? now : 0
     setScene(prev => {
       if (!coalesce) {
-        undoStack.current.push({ scene: prev, label: opts?.label ?? '外部更新' })
+        undoStack.current.push({ scene: prev, label: opts?.label ?? '外部更新', at: now })
         if (undoStack.current.length > 80) undoStack.current.shift()
         redoStack.current = []
         refreshFlags()
@@ -113,7 +124,7 @@ export function useEditorState(initial: Scene): EditorApi {
     })
   }, [refreshFlags, scheduleSave])
 
-  const updateLayer = useCallback((id: string, patch: Partial<SceneLayer>, opts?: { label?: string }) => {
+  const updateLayer = useCallback((id: string, patch: Partial<SceneLayer>, opts?: { label?: string; mergeMs?: number }) => {
     updateScene(s => ({ ...s, layers: s.layers.map(l => (l.id === id ? { ...l, ...patch } : l)) }), opts)
   }, [updateScene])
 
@@ -141,7 +152,7 @@ export function useEditorState(initial: Scene): EditorApi {
     const entry = undoStack.current.pop()
     if (!entry) return
     setScene(prev => {
-      redoStack.current.push({ scene: prev, label: entry.label })
+      redoStack.current.push({ scene: prev, label: entry.label, at: Date.now() })
       return entry.scene
     })
     refreshFlags()
@@ -154,7 +165,7 @@ export function useEditorState(initial: Scene): EditorApi {
     const entry = redoStack.current.pop()
     if (!entry) return
     setScene(prev => {
-      undoStack.current.push({ scene: prev, label: entry.label })
+      undoStack.current.push({ scene: prev, label: entry.label, at: Date.now() })
       return entry.scene
     })
     refreshFlags()
@@ -187,6 +198,24 @@ export function useEditorState(initial: Scene): EditorApi {
         e.preventDefault()
         if (e.shiftKey) redo()
         else undo()
+        return
+      }
+      // ←/→ 逐帧步进，Home/End 跳首尾（剪映同款）
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault()
+        const fps = sceneRef.current.canvas.fps || 30
+        const step = (e.shiftKey ? 10 : 1) / fps
+        setTime(timeRef.current + (e.key === 'ArrowLeft' ? -step : step))
+        return
+      }
+      if (e.key === 'Home') {
+        e.preventDefault()
+        setTime(0)
+        return
+      }
+      if (e.key === 'End') {
+        e.preventDefault()
+        setTime(sceneRef.current.canvas.duration)
         return
       }
       if (e.code === 'Space') {
