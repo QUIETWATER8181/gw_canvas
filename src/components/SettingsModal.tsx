@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import type { AppState, ModelConnection, ProviderKind } from '../shared/ipc'
+import type { AppState, ExportSettings, ModelConnection, ProviderKind } from '../shared/ipc'
 
 interface Props {
   open: boolean
   state: AppState
   onClose(): void
   onChanged(next: AppState): void
+  onToast?(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
 }
 
 const PRESETS: { label: string; kind: ProviderKind; baseUrl: string; model: string }[] = [
@@ -17,7 +18,8 @@ const PRESETS: { label: string; kind: ProviderKind; baseUrl: string; model: stri
   { label: '中转站 / 其他', kind: 'openai-compatible', baseUrl: '', model: '' }
 ]
 
-export function SettingsModal({ open, state, onClose, onChanged }: Props) {
+export function SettingsModal({ open, state, onClose, onChanged, onToast }: Props) {
+  const [section, setSection] = useState<'model' | 'export'>('model')
   const [editing, setEditing] = useState<ModelConnection | null>(null)
   const [name, setName] = useState('')
   const [kind, setKind] = useState<ProviderKind>('deepseek')
@@ -28,6 +30,7 @@ export function SettingsModal({ open, state, onClose, onChanged }: Props) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [exportSettings, setExportSettings] = useState<ExportSettings | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -39,6 +42,13 @@ export function SettingsModal({ open, state, onClose, onChanged }: Props) {
       setModels(c.models ?? [])
     }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!open || section !== 'export') return
+    let alive = true
+    void window.gewu.getExportSettings().then(s => { if (alive) setExportSettings(s) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [open, section])
 
   if (!open) return null
 
@@ -100,17 +110,110 @@ export function SettingsModal({ open, state, onClose, onChanged }: Props) {
     onChanged(next)
   }
 
+  async function patchExport(patch: Partial<Pick<ExportSettings, 'dir' | 'askEveryTime' | 'revealAfterExport'>>) {
+    try {
+      const next = await window.gewu.setExportSettings(patch)
+      setExportSettings(next)
+      onToast?.({ text: '导出设置已保存', kind: 'ok' })
+    } catch (e) {
+      onToast?.({ text: e instanceof Error ? e.message : String(e), kind: 'err' })
+    }
+  }
+
+  async function pickExportDir() {
+    try {
+      const r = await window.gewu.chooseExportFolder({ defaultPath: exportSettings?.resolvedDir })
+      if (r.ok && r.dir) await patchExport({ dir: r.dir })
+    } catch (e) {
+      onToast?.({ text: e instanceof Error ? e.message : String(e), kind: 'err' })
+    }
+  }
+
   return (
     <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="modal">
         <div className="modal-head">
           <div>
-            <h2>模型连接</h2>
-            <p className="tiny muted">密钥用系统安全存储加密，只留在本机。agent 通过本机代理调用，不会泄露给运行时。</p>
+            <h2>{section === 'model' ? '模型连接' : '导出与保存'}</h2>
+            <p className="tiny muted">
+              {section === 'model'
+                ? '密钥用系统安全存储加密，只留在本机。agent 通过本机代理调用，不会泄露给运行时。'
+                : '视频想放哪就放哪：这里定默认目录，导出时还能临时改。'}
+            </p>
           </div>
           <button className="icon-btn" onClick={onClose}>×</button>
         </div>
 
+        <div className="modal-tabs">
+          <button className={section === 'model' ? 'on' : ''} onClick={() => setSection('model')}>模型连接</button>
+          <button className={section === 'export' ? 'on' : ''} onClick={() => setSection('export')}>导出与保存</button>
+        </div>
+
+        {section === 'export' ? (
+          <div className="xset">
+            <div className="field">
+              <label>默认导出位置</label>
+              <div className="xdlg-path">
+                <span className="mono" title={exportSettings?.dir ?? exportSettings?.resolvedDir}>
+                  {exportSettings?.dir ?? exportSettings?.resolvedDir ?? '读取中…'}
+                </span>
+                <button className="btn sm" onClick={() => void pickExportDir()}>选择文件夹…</button>
+                {exportSettings?.dir && (
+                  <button className="link" onClick={() => void patchExport({ dir: null })}>恢复默认</button>
+                )}
+              </div>
+              <span className="hint">
+                固定后：导出对话框默认填这里，agent 自己导出的成片也放这里。
+                没固定时按「最近一次用过的目录 → 系统视频文件夹」走。
+              </span>
+            </div>
+
+            <label className="xdlg-check">
+              <input
+                type="checkbox"
+                checked={exportSettings?.askEveryTime ?? true}
+                onChange={e => void patchExport({ askEveryTime: e.target.checked })}
+              />
+              <span>每次导出都弹位置选择（关掉就一直用上面的目录）</span>
+            </label>
+
+            <label className="xdlg-check">
+              <input
+                type="checkbox"
+                checked={exportSettings?.revealAfterExport ?? true}
+                onChange={e => void patchExport({ revealAfterExport: e.target.checked })}
+              />
+              <span>导出完成后在文件夹中显示</span>
+            </label>
+
+            <div className="field">
+              <label>最近用过的目录</label>
+              {exportSettings?.recentDirs.length
+                ? (
+                  <div className="xdlg-recent">
+                    {exportSettings.recentDirs.map(d => (
+                      <button key={d} className="xdlg-chip" title={d} onClick={() => void patchExport({ dir: d })}>
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                )
+                : <span className="hint">还没有导出过。第一次导出时选的目录会记在这里。</span>}
+              <div className="row">
+                <button className="link" onClick={() => void window.gewu.openFolder(exportSettings?.resolvedDir ?? '')} disabled={!exportSettings}>
+                  打开当前导出目录
+                </button>
+                <button className="link" onClick={() => void window.gewu.openFolder(state.workspace)}>打开当前草稿目录</button>
+              </div>
+            </div>
+
+            <div className="xset-note">
+              草稿本身存在 <code className="mono">{state.workspace.replace(/[\\/][^\\/]+$/, '')}</code>，
+              每个草稿一个文件夹，含 <code>scene.json</code>、<code>assets/</code>、<code>exports/</code> 和对话记录。
+              删除的草稿会挪进 <code>trash/</code>。
+            </div>
+          </div>
+        ) : (
         <div className="modal-body">
           <div className="conn-list">
             <div className="conn-list-head">
@@ -215,6 +318,7 @@ export function SettingsModal({ open, state, onClose, onChanged }: Props) {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   )

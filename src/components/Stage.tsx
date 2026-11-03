@@ -89,6 +89,34 @@ export function Stage({ onToast, exportJob }: Props) {
     return () => { alive = false }
   }, [scene, renderNow])
 
+  // 草稿封面：场景变了就节流截一张 480px 小图写进 previews/cover.png，
+  // 草稿库卡片因此有真实画面（而不是一块灰格子）。失败不影响编辑。
+  const coverAt = useRef(0)
+  useEffect(() => {
+    const r = rendererRef.current
+    if (!r || playing) return
+    const now = Date.now()
+    if (now - coverAt.current < 5000) return
+    coverAt.current = now
+    const timer = setTimeout(() => {
+      try {
+        const src = r.element
+        const w = 480
+        const h = Math.max(1, Math.round((w * src.height) / src.width))
+        const c = document.createElement('canvas')
+        c.width = w
+        c.height = h
+        const ctx = c.getContext('2d')
+        if (!ctx) return
+        ctx.drawImage(src, 0, 0, w, h)
+        const b64 = c.toDataURL('image/png').split(',')[1] ?? ''
+        if (!b64) return
+        void window.gewu.writeCover(Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)))
+      } catch { /* 画布被污染/没内容都无所谓，封面只是锦上添花 */ }
+    }, 1600)
+    return () => clearTimeout(timer)
+  }, [scene, playing])
+
   // 窗口尺寸变化
   useEffect(() => {
     const ro = new ResizeObserver(() => { if (!playing) renderNow() })

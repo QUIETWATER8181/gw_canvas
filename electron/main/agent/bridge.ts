@@ -31,6 +31,8 @@ export interface BridgeOptions {
   getVisionConnection?(): { id: string; name: string; baseUrl: string; model: string; apiKey: string } | null
   getWorkspace(): string
   getScenePath(): string
+  /** 当前草稿名，写进 prompt 上下文（让 agent 知道自己在哪个草稿里干活） */
+  getDraftName?(): string
   onChat(msg: ChatMessage): void
   onStatus(status: AgentStatus): void
   onSceneChanged(patch: ScenePatch): void
@@ -94,6 +96,9 @@ export class AgentBridge {
   }
 
   getStatus(): AgentStatus { return this.status }
+
+  /** 正在跑一轮 prompt 时不许切草稿（cwd 会变，工具会写错地方） */
+  isBusy(): boolean { return this.busy }
 
   private setStatus(s: AgentStatus): void {
     this.status = s
@@ -271,6 +276,7 @@ export class AgentBridge {
     }
     return [
       '<scene-state>',
+      `草稿：${this.o.getDraftName?.() || '未命名'}（每个草稿是独立工作区，素材和对话互不影响）`,
       `文件：scene.json（工作区根目录）`,
       `标题：${scene.meta.title}${scene.meta.brief ? `｜主题：${scene.meta.brief}` : ''}`,
       `画布：${scene.canvas.width}×${scene.canvas.height} @ ${scene.canvas.fps}fps，时长 ${scene.canvas.duration}s`,
@@ -361,7 +367,7 @@ export class AgentBridge {
     wrap('scene_write', async (args) => {
       const scene = args.scene
       if (!scene || typeof scene !== 'object') throw new Error('scene 必须是对象')
-      const { normalizeScene, auditSceneInput } = await import('../scene-store')
+      const { normalizeScene, auditSceneInput, writeSceneFile } = await import('../scene-store')
       const warnings = auditSceneInput(scene)
       const normalized = normalizeScene(scene)
       // 空场景几乎总是模型把参数写坏了（layers 拼错、只给了 meta……）。
@@ -376,7 +382,7 @@ export class AgentBridge {
       if (normalized.layers.every(l => !l.draw.trim())) {
         throw new Error('所有图层的 draw 都是空的，已拒绝写入。至少给一层写绘制代码。')
       }
-      await writeFile(this.o.getScenePath(), JSON.stringify(normalized, null, 2), 'utf8')
+      await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
       return { ok: true, layers: normalized.layers.length, duration: normalized.canvas.duration, warnings }
     })
@@ -384,7 +390,7 @@ export class AgentBridge {
     wrap('scene_set_layer', async (args) => {
       const id = String(args.id ?? '')
       if (!id) throw new Error('缺少图层 id')
-      const { normalizeScene } = await import('../scene-store')
+      const { normalizeScene, writeSceneFile } = await import('../scene-store')
       const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
       const layer = scene.layers.find(l => l.id === id)
       if (!layer) throw new Error(`图层 ${id} 不存在；现有：${scene.layers.map(l => l.id).join(', ')}`)
@@ -396,13 +402,13 @@ export class AgentBridge {
       if (patch.end !== undefined) layer.end = Number(patch.end)
       if (args.canvas && typeof args.canvas === 'object') Object.assign(scene.canvas, args.canvas)
       const normalized = normalizeScene(scene)
-      await writeFile(this.o.getScenePath(), JSON.stringify(normalized, null, 2), 'utf8')
+      await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
       return { ok: true, layer: id }
     })
 
     wrap('scene_add_layer', async (args) => {
-      const { normalizeScene, auditSceneInput } = await import('../scene-store')
+      const { normalizeScene, auditSceneInput, writeSceneFile } = await import('../scene-store')
       const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
       const layer = args.layer as Record<string, unknown>
       if (!layer || typeof layer.draw !== 'string') throw new Error('layer.draw 必须是字符串')
@@ -422,20 +428,20 @@ export class AgentBridge {
       })
       const warnings = auditSceneInput({ layers: [layer] })
       const normalized = normalizeScene(scene)
-      await writeFile(this.o.getScenePath(), JSON.stringify(normalized, null, 2), 'utf8')
+      await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
       return { ok: true, id, count: normalized.layers.length, warnings }
     })
 
     wrap('scene_delete_layer', async (args) => {
       const id = String(args.id ?? '')
-      const { normalizeScene } = await import('../scene-store')
+      const { normalizeScene, writeSceneFile } = await import('../scene-store')
       const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
       const before = scene.layers.length
       scene.layers = scene.layers.filter(l => l.id !== id)
       if (scene.layers.length === before) throw new Error(`图层 ${id} 不存在`)
       const normalized = normalizeScene(scene)
-      await writeFile(this.o.getScenePath(), JSON.stringify(normalized, null, 2), 'utf8')
+      await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
       return { ok: true, count: normalized.layers.length }
     })
@@ -477,7 +483,7 @@ export class AgentBridge {
     wrap('check_scene', async (args) => {
       const samples = Number(args.samples ?? 8)
       const runtime = await this.o.invokeRendererTool({ name: 'check_scene', args: { samples } }, 180_000) as string
-      const { normalizeScene, auditSceneInput } = await import('../scene-store')
+      const { normalizeScene, auditSceneInput, writeSceneFile } = await import('../scene-store')
       const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
       const warnings = auditSceneInput(scene)
       if (!warnings.length) return runtime

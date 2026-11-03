@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppState, ChatMessage } from './shared/ipc'
+import type { AppState, ChatMessage, DraftSummary } from './shared/ipc'
 import type { Scene } from './shared/scene'
 import { emptyScene } from './shared/scene'
 import { EditorContext, useEditorState } from './state/editor'
@@ -10,6 +10,7 @@ import { RightPanel } from './components/RightPanel'
 import { ToolHost } from './components/ToolHost'
 import { SettingsModal } from './components/SettingsModal'
 import { ExportToast } from './components/ExportToast'
+import { ExportDialog, type ExportStartInput } from './components/ExportDialog'
 import './styles/app.css'
 
 export default function App() {
@@ -17,7 +18,10 @@ export default function App() {
   const [scene, setScene] = useState<Scene>(emptyScene())
   const [ready, setReady] = useState(false)
   const [chat, setChat] = useState<ChatMessage[]>([])
+  const [drafts, setDrafts] = useState<DraftSummary[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [switching, setSwitching] = useState(false)
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'err' | 'info' } | null>(null)
   const [exportJob, setExportJob] = useState<{ running: boolean; frame: number; total: number; phase: string } | null>(null)
   const agentSourceRef = useRef(false)
@@ -28,12 +32,19 @@ export default function App() {
   useEffect(() => {
     let alive = true
     void (async () => {
-      const [s, sc] = await Promise.all([window.gewu.getState(), window.gewu.readScene()])
+      const [s, sc, list, history] = await Promise.all([
+        window.gewu.getState(),
+        window.gewu.readScene(),
+        window.gewu.listDrafts(),
+        window.gewu.readChat()
+      ])
       if (!alive) return
       setAppState(s)
       setScene(sc)
+      setDrafts(list)
+      setChat(history)
       setReady(true)
-      editor.replaceScene(sc, { persist: false, label: '载入' })
+      editor.replaceScene(sc, { persist: false, label: '载入', resetHistory: true })
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -64,7 +75,21 @@ export default function App() {
     const offExport = window.gewu.onExportProgress(p => {
       setExportJob({ running: p.phase !== 'done' && p.phase !== 'error', frame: p.frame, total: p.total, phase: p.phase })
     })
-    return () => { offChat(); offStatus(); offScene(); offExport() }
+    const offDrafts = window.gewu.onDraftsChanged(list => setDrafts(list))
+    // 草稿库窗口点了「打开」：换场景、换对话、清掉撤销栈
+    const offOpened = window.gewu.onDraftOpened(async draft => {
+      try {
+        const [sc, history] = await Promise.all([window.gewu.readScene(), window.gewu.readChat()])
+        setScene(sc)
+        setChat(history)
+        editor.replaceScene(sc, { persist: false, label: '切换草稿', resetHistory: true })
+        setAppState(prev => (prev ? { ...prev, draft } : prev))
+        setToast({ text: `已切换到草稿「${draft.name}」`, kind: 'ok' })
+      } finally {
+        setSwitching(false)
+      }
+    })
+    return () => { offChat(); offStatus(); offScene(); offExport(); offDrafts(); offOpened() }
   }, [editor])
 
   useEffect(() => {
@@ -229,9 +254,15 @@ export default function App() {
       <div className="app">
         <TitleBar
           state={appState}
+          drafts={drafts}
+          switching={switching}
           onOpenSettings={() => setSettingsOpen(true)}
-          onExport={() => void doExport()}
+          onOpenExport={() => setExportOpen(true)}
+          onOpenLibrary={() => void window.gewu.openDraftLibrary()}
+          onOpenDraft={id => void switchDraft(id)}
+          onNewDraft={() => void newDraft()}
           onNewSession={() => { setChat([]); void window.gewu.newSession() }}
+          onToast={setToast}
         />
         <div className="workspace">
           <LeftPanel onToast={setToast} />
@@ -240,14 +271,14 @@ export default function App() {
         </div>
         <ToolHost
           onExport={async args => {
-            // agent 触发的导出直接落到工作区 exports/，不打断用户
+            // agent 触发的导出：不弹框，落到「设置里的导出目录」，没设置就当前草稿的 exports/
             const name = String(args.name ?? `${editor.state.scene.meta.title || 'physics-video'}.mp4`)
             try {
               setExportJob({ running: true, frame: 0, total: 0, phase: 'prepare' })
-              const result = await runExport(null, args.from as number | undefined, args.to as number | undefined)
+              const result = await runExport(args.from as number | undefined, args.to as number | undefined)
               const saved = await window.gewu.saveWorkspaceExport(name, result.bytes)
               if (!saved.ok) throw new Error(saved.error ?? '写入失败')
-              setToast({ text: `已导出 ${result.frames} 帧 · ${result.seconds.toFixed(1)}s → exports/`, kind: 'ok' })
+              setToast({ text: `已导出 ${result.frames} 帧 · ${result.seconds.toFixed(1)}s → ${saved.path}`, kind: 'ok' })
               return { path: saved.path, frames: result.frames, seconds: result.seconds }
             } catch (error) {
               setExportJob(null)
@@ -261,6 +292,14 @@ export default function App() {
           state={appState}
           onClose={() => setSettingsOpen(false)}
           onChanged={next => setAppState(next)}
+          onToast={setToast}
+        />
+        <ExportDialog
+          open={exportOpen}
+          scene={editor.state.scene}
+          draftName={appState.draft?.name ?? '未命名草稿'}
+          onClose={() => setExportOpen(false)}
+          onStart={input => void startExport(input)}
         />
         {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
         {exportJob?.running && <ExportToast job={exportJob} />}
@@ -268,7 +307,7 @@ export default function App() {
     </EditorContext.Provider>
   )
 
-  async function runExport(outPath: string | null, from?: number, to?: number) {
+  async function runExport(from?: number, to?: number) {
     const { exportScene } = await import('./engine/export')
     const result = await exportScene({
       scene: editor.state.scene,
@@ -277,23 +316,50 @@ export default function App() {
       onProgress: (frame, total, phase) => setExportJob({ running: true, frame, total, phase })
     })
     setExportJob({ running: false, frame: 0, total: 0, phase: 'done' })
-    if (outPath) {
-      const saved = await window.gewu.saveExport(outPath, result.bytes)
-      if (!saved.ok) throw new Error(saved.error ?? '写入失败')
-      setToast({ text: `已导出 ${result.frames} 帧 · ${result.seconds.toFixed(1)}s`, kind: 'ok' })
-    }
     return { bytes: result.bytes, frames: result.frames, seconds: result.seconds }
   }
 
-  async function doExport() {
-    const out = await window.gewu.chooseExportPath({ name: `${editor.state.scene.meta.title || 'physics-video'}.mp4` })
-    if (!out.ok || !out.outPath) return
+  /** 用户在导出对话框里定好位置后走这里 */
+  async function startExport(input: ExportStartInput) {
+    setExportOpen(false)
     try {
       setExportJob({ running: true, frame: 0, total: 0, phase: 'prepare' })
-      await runExport(out.outPath)
+      const result = await runExport(input.from, input.to)
+      const saved = await window.gewu.saveExportTo(
+        { dir: input.dir, name: input.name },
+        result.bytes,
+        { reveal: input.reveal, overwrite: input.overwrite }
+      )
+      if (!saved.ok || !saved.path) throw new Error(saved.error ?? '写入失败')
+      setToast({ text: `已导出 ${result.frames} 帧 · ${result.seconds.toFixed(1)}s → ${saved.path}`, kind: 'ok' })
     } catch (error) {
       setExportJob(null)
       setToast({ text: `导出失败：${error instanceof Error ? error.message : String(error)}`, kind: 'err' })
+    }
+  }
+
+  async function switchDraft(id: string) {
+    if (!appState || id === appState.draft?.id) return
+    setSwitching(true)
+    try {
+      const r = await window.gewu.openDraft(id)
+      if (!r.ok) throw new Error(r.error ?? '切换失败')
+      if (r.drafts) setDrafts(r.drafts)
+    } catch (error) {
+      setSwitching(false)
+      setToast({ text: error instanceof Error ? error.message : String(error), kind: 'err' })
+    }
+  }
+
+  async function newDraft() {
+    try {
+      const r = await window.gewu.createDraft({})
+      if (!r.ok || !r.draft) throw new Error(r.error ?? '新建失败')
+      if (r.drafts) setDrafts(r.drafts)
+      await switchDraft(r.draft.id)
+      setToast({ text: `已新建草稿「${r.draft.name}」，到草稿库可以改名`, kind: 'ok' })
+    } catch (error) {
+      setToast({ text: error instanceof Error ? error.message : String(error), kind: 'err' })
     }
   }
 }

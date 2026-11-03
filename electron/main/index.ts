@@ -1,17 +1,21 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, protocol, net } from 'electron'
-import { join, extname } from 'node:path'
+import { app, BrowserWindow, ipcMain, protocol, net } from 'electron'
+import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { mkdir, readFile, writeFile, stat } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { ConfigStore } from './store'
 import { SceneStore } from './scene-store'
+import { DraftStore } from './draft-store'
+import { cleanupTempFiles } from './atomic'
 import { AgentBridge } from './agent/bridge'
 import { registerIpc } from './ipc'
 import type { Scene } from '@shared/scene'
 
 let mainWindow: BrowserWindow | null = null
+let draftWindow: BrowserWindow | null = null
 let store: ConfigStore
 let sceneStore: SceneStore
+let draftStore: DraftStore
 let bridge: AgentBridge
 
 // --log=<file>：把主进程的 console 落到文件。
@@ -39,6 +43,27 @@ if (logArgv) {
 const isDev = !app.isPackaged
 const RENDERER_DEV_URL = process.env['ELECTRON_RENDERER_URL']
 
+// 开发/测试用：--user-data=<dir> 把整个应用数据目录换掉。
+// 自动化测试不该碰作者真实的草稿、配置和导出记录。
+const userDataArg = process.argv.find(a => a.startsWith('--user-data='))
+if (userDataArg) {
+  const dir = resolve(userDataArg.slice('--user-data='.length))
+  mkdirSync(dir, { recursive: true })
+  app.setPath('userData', dir)
+}
+
+// 只允许一个实例：两个实例同时写同一份 scene.json / config.json 会互相覆盖
+// （实测把 config.json 写成了半截 JSON，下次启动直接「配置丢了」）。
+const singleInstance = app.requestSingleInstanceLock()
+if (!singleInstance) app.quit()
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+})
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'gewu',
@@ -62,6 +87,22 @@ function agentsDoc(): string {
 function resourceFile(name: string): string {
   if (app.isPackaged) return join(process.resourcesPath, name)
   return join(app.getAppPath(), 'resources', name)
+}
+
+/** 把相对路径拼进基准目录；越界（../ 或绝对路径）返回 null */
+function safeJoin(base: string, rel: string): string | null {
+  const abs = resolve(base, rel)
+  if (abs !== resolve(base) && !abs.startsWith(resolve(base) + sep)) return null
+  return abs
+}
+
+/** 读本地文件并带上 CORS 头（否则 canvas 会被判跨域污染，toDataURL 直接抛） */
+async function serveFile(abs: string): Promise<Response> {
+  const upstream = await net.fetch(pathToFileURL(abs).toString())
+  const headers = new Headers(upstream.headers)
+  headers.set('Access-Control-Allow-Origin', '*')
+  headers.set('Cache-Control', 'no-cache')
+  return new Response(upstream.body, { status: upstream.status, headers })
 }
 
 async function createWindow() {
@@ -102,7 +143,81 @@ async function createWindow() {
     await mainWindow.loadFile(join(__dirname, '../renderer/index.html'), search ? { search } : undefined)
   }
 
-  mainWindow.on('closed', () => { mainWindow = null })
+  mainWindow.on('closed', () => {
+    mainWindow = null
+    // 编辑器关了就把草稿库也关掉，不留一个孤零零的窗口占着进程
+    if (draftWindow) draftWindow.close()
+  })
+}
+
+/**
+ * 草稿库窗口（照达芬奇「项目管理器」/ 剪映「草稿箱」的做法：独立窗口）。
+ * 单例：再点一次只是把已有窗口提到前面。
+ */
+function createDraftWindow(): void {
+  if (draftWindow && !draftWindow.isDestroyed()) {
+    if (draftWindow.isMinimized()) draftWindow.restore()
+    draftWindow.show()
+    draftWindow.focus()
+    return
+  }
+  draftWindow = new BrowserWindow({
+    width: 1120,
+    height: 740,
+    minWidth: 840,
+    minHeight: 560,
+    show: false,
+    title: '格物 · 草稿库',
+    backgroundColor: '#0a0e13',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#0a0e13', symbolColor: '#93a4b1', height: 44 },
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+  draftWindow.once('ready-to-show', () => draftWindow?.show())
+  draftWindow.on('closed', () => { draftWindow = null })
+
+  const devBase = RENDERER_DEV_URL
+    ? new URL('drafts.html', RENDERER_DEV_URL.endsWith('/') ? RENDERER_DEV_URL : `${RENDERER_DEV_URL}/`).toString()
+    : ''
+  if (devBase) {
+    void draftWindow.loadURL(devBase)
+  } else {
+    void draftWindow.loadFile(join(__dirname, '../renderer/drafts.html'))
+  }
+}
+
+/** 向所有窗口广播（草稿增删改两个窗口都要知道） */
+function broadcast(channel: string, payload: unknown): void {
+  for (const win of [mainWindow, draftWindow]) {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+  }
+}
+
+/**
+ * 切换草稿：换工作区、重启 agent（agent 的 cwd 就是草稿目录）、广播给两个窗口。
+ * 顺序很重要：先把旧草稿的对话落盘，再换 activeId，否则最后几条消息会写到新草稿里。
+ */
+async function activateDraft(id: string): Promise<void> {
+  if (id === draftStore.activeId) return
+  if (bridge?.isBusy()) {
+    throw new Error('agent 正在处理上一条消息。等它做完，或先点「停止」，再切草稿。')
+  }
+  draftStore.flushAll()
+  const summary = await draftStore.open(id)
+  const previous = sceneStore
+  const next = new SceneStore(draftStore.activeDir(), agentsDoc())
+  await next.init()
+  sceneStore = next
+  previous?.dispose()
+  await bridge.newSession().catch(error => {
+    console.error('切换草稿后重启 agent 失败', error)
+  })
+  broadcast('gewu:draft-opened', { id: summary.id, name: summary.name, dir: draftStore.activeDir() })
 }
 
 function wireBridge() {
@@ -114,7 +229,10 @@ function wireBridge() {
     getVisionConnection: () => store.getVisionConnectionSecret(),
     getWorkspace: () => sceneStore.workspace,
     getScenePath: () => sceneStore.scenePath,
+    getDraftName: () => draftStore.activeName,
     onChat: msg => {
+      // 每个草稿各自留一份对话，切回去还能接着聊
+      draftStore.recordChat(msg)
       mainWindow?.webContents.send('gewu:chat', msg)
       if (isDev) console.log(`[chat:${msg.role}] ${msg.text.replace(/\s+/g, ' ').slice(0, 300)}`)
     },
@@ -157,31 +275,41 @@ ipcMain.on('gewu:tool-result', (_e, payload: { id: string; ok: boolean; result?:
 })
 
 app.whenReady().then(async () => {
+  if (!singleInstance) return
   const userData = app.getPath('userData')
   await mkdir(userData, { recursive: true })
+  // 清掉上次被强杀留下的 *.tmp-*（writeFile 与 rename 之间退出会留下半截文件）
+  await cleanupTempFiles(userData)
   store = new ConfigStore(join(userData, 'config.json'))
   await store.load()
 
-  const workspace = join(userData, 'workspace')
-  await mkdir(workspace, { recursive: true })
-  sceneStore = new SceneStore(workspace, agentsDoc())
+  // 草稿库：老版本的单工作区会被整体迁移成第一个草稿
+  draftStore = new DraftStore(userData)
+  await draftStore.init()
+  sceneStore = new SceneStore(draftStore.activeDir(), agentsDoc())
 
-  // 自定义协议：gewu://workspace/<相对路径> 读取工作区资源
+  // 自定义协议：
+  //   gewu://workspace/<相对路径>  当前草稿的素材
+  //   gewu://draft/<id>/<相对路径> 草稿库里任意草稿（封面缩略图）
+  //   gewu://app/<相对路径>        渲染进程资源
   protocol.handle('gewu', async request => {
     const url = new URL(request.url)
+    const rel = decodeURIComponent(url.pathname.replace(/^\//, ''))
     if (url.hostname === 'workspace') {
-      const rel = decodeURIComponent(url.pathname.replace(/^\//, ''))
-      const abs = join(workspace, rel)
-      if (!abs.startsWith(workspace)) return new Response('forbidden', { status: 403 })
-      const upstream = await net.fetch(pathToFileURL(abs).toString())
-      // 必须带 CORS 头，否则画布会被判为跨域污染
-      const headers = new Headers(upstream.headers)
-      headers.set('Access-Control-Allow-Origin', '*')
-      headers.set('Cache-Control', 'no-cache')
-      return new Response(upstream.body, { status: upstream.status, headers })
+      const base = sceneStore.workspace
+      const abs = safeJoin(base, rel)
+      if (!abs) return new Response('forbidden', { status: 403 })
+      return serveFile(abs)
+    }
+    if (url.hostname === 'draft') {
+      const [id, ...rest] = rel.split('/')
+      const dir = draftStore.dirOf(id)
+      if (!dir) return new Response('forbidden', { status: 403 })
+      const abs = safeJoin(dir, rest.join('/'))
+      if (!abs) return new Response('forbidden', { status: 403 })
+      return serveFile(abs)
     }
     if (url.hostname === 'app') {
-      const rel = decodeURIComponent(url.pathname.replace(/^\//, ''))
       return net.fetch(pathToFileURL(join(__dirname, '../renderer', rel)).toString())
     }
     return new Response('not found', { status: 404 })
@@ -189,12 +317,34 @@ app.whenReady().then(async () => {
 
   await sceneStore.init()
   wireBridge()
-  registerIpc({ store, sceneStore, bridge, getWindow: () => mainWindow })
+  registerIpc({
+    store,
+    drafts: draftStore,
+    getSceneStore: () => sceneStore,
+    bridge,
+    getWindow: () => mainWindow,
+    switchDraft: activateDraft,
+    openDraftWindow: createDraftWindow,
+    broadcast
+  })
 
   await createWindow()
   void bridge.start().catch(err => {
     console.error('agent start failed', err)
   })
+
+  // 开发调试：--draft-window / --probe-window=drafts / --shot-window=drafts
+  // 都会在启动时把草稿库窗口打开（探针和截图默认只作用于主窗口）
+  const probeWindowArg = process.argv.find(a => a.startsWith('--probe-window='))
+  const shotWindowArg = process.argv.find(a => a.startsWith('--shot-window='))
+  const wantDraftWindow =
+    process.argv.includes('--draft-window') ||
+    probeWindowArg === '--probe-window=drafts' ||
+    shotWindowArg === '--shot-window=drafts'
+  if (wantDraftWindow) createDraftWindow()
+
+  const windowFor = (which: string | undefined): BrowserWindow | null =>
+    which === 'drafts' ? draftWindow : mainWindow
 
   // 开发调试：--prompt=... 直接发一条消息给 agent，--exit-after 结束后退出
   // 加 --prompt-ui 会附带一份合成的编辑器上下文（时间/选中图层/选区），用于验证上下文注入
@@ -232,7 +382,7 @@ app.whenReady().then(async () => {
     setTimeout(() => {
       void (async () => {
         try {
-          const wc = mainWindow?.webContents
+          const wc = windowFor(shotWindowArg?.slice('--shot-window='.length))?.webContents
           if (!wc) throw new Error('no window')
           if (clickArg) {
             const sel = clickArg.slice('--shot-click='.length)
@@ -275,7 +425,7 @@ app.whenReady().then(async () => {
     setTimeout(() => {
       void (async () => {
         try {
-          const wc = mainWindow?.webContents
+          const wc = windowFor(probeWindowArg?.slice('--probe-window='.length))?.webContents
           if (!wc) throw new Error('no window')
           if (clickArg) {
             const sel = clickArg.slice('--probe-click='.length)
@@ -299,6 +449,8 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   void bridge?.stop()
+  draftStore?.flushAll()
+  store?.flushSync()
   if (process.platform !== 'darwin') {
     app.quit()
     // 子进程（DSH 运行时）有时不肯立刻退出，quit 会一直挂着。
@@ -307,4 +459,8 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => { void bridge?.stop() })
+app.on('before-quit', () => {
+  void bridge?.stop()
+  draftStore?.flushAll()
+  store?.flushSync()
+})

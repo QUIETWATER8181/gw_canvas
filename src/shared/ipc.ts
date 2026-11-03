@@ -40,6 +40,69 @@ export interface ChatMessage {
   error?: boolean
 }
 
+/** 当前打开的草稿 */
+export interface ActiveDraft {
+  id: string
+  name: string
+  /** 草稿目录绝对路径（每个草稿是一个自包含的工作区） */
+  dir: string
+}
+
+/**
+ * 草稿库里的一张卡片。
+ * 借鉴剪映「草稿箱」和达芬奇「项目管理器」：缩略图 + 名字 + 时长 + 修改时间，
+ * 可搜索、可置顶、可复制、可删除。
+ */
+export interface DraftSummary {
+  id: string
+  name: string
+  /** scene.meta.title（agent 起的标题，通常比草稿名更具体） */
+  title: string
+  createdAt: number
+  updatedAt: number
+  /** 最后打开时间（0 = 没打开过） */
+  openedAt: number
+  durationSec: number
+  layerCount: number
+  assetCount: number
+  exportCount: number
+  /** gewu://draft/<id>/previews/cover.png?v=…；没截过封面就是 null */
+  coverUrl: string | null
+  pinned: boolean
+  /** 是否就是主窗口现在打开的那个 */
+  active: boolean
+  dir: string
+}
+
+export interface DraftOpResult {
+  ok: boolean
+  error?: string
+  draft?: DraftSummary
+  /** 操作后的完整草稿列表，省一次往返 */
+  drafts?: DraftSummary[]
+}
+
+/**
+ * 导出位置设置。
+ * 作者要的是「视频想放哪就放哪」：固定目录、每次问、最近用过的一键切换。
+ */
+export interface ExportSettings {
+  /** 固定导出目录；null = 用 resolvedDir（最近目录或系统视频目录） */
+  dir: string | null
+  /** 每次导出都弹选择框（导出对话框里仍可改） */
+  askEveryTime: boolean
+  /** 导出完成后在资源管理器里定位文件 */
+  revealAfterExport: boolean
+  /** 最近用过的目录，最近的在前 */
+  recentDirs: string[]
+  /** 主进程算好的「这次默认存哪」 */
+  resolvedDir: string
+  /** 「恢复默认」用的目录（系统视频目录） */
+  systemDir: string
+  /** 自动化测试用：--export-path 指定的完整文件路径（正常使用时为 null） */
+  forcedPath?: string | null
+}
+
 export interface AppState {
   workspace: string
   scenePath: string
@@ -48,6 +111,9 @@ export interface AppState {
   /** 看图用的连接；null 表示跟随 activeConnectionId */
   visionConnectionId?: string | null
   agent: AgentStatus
+  /** 当前草稿；老版本升级上来时也会有一个 */
+  draft: ActiveDraft | null
+  exportSettings: ExportSettings
 }
 
 export interface ScenePatch {
@@ -135,6 +201,8 @@ export interface GewuApi {
   pickImage(): Promise<{ name: string; path: string; dataUrl: string } | null>
   importAsset(): Promise<{ name: string; path: string; kind: string } | null>
   revealPath(path: string): Promise<void>
+  /** 用资源管理器打开一个目录（不选中） */
+  openFolder(path: string): Promise<{ ok: boolean; error?: string }>
   listAssets(): Promise<{ name: string; path: string; size: number }[]>
 
   /** 系统里可用的 TTS 音色 */
@@ -155,14 +223,42 @@ export interface GewuApi {
   chooseExportPath(req: ExportRequest): Promise<{ ok: boolean; outPath?: string; error?: string }>
   /** 把渲染好的 mp4 字节写入磁盘 */
   saveExport(outPath: string, bytes: Uint8Array): Promise<{ ok: boolean; error?: string }>
-  /** agent 触发的导出：直接写进工作区 exports/，不弹对话框 */
+  /** agent 触发的导出：写进「设置里的导出目录」，没设置就落到当前草稿的 exports/ */
   saveWorkspaceExport(name: string, bytes: Uint8Array): Promise<{ ok: boolean; path: string; error?: string }>
+  /** 用户选的导出：目录 + 文件名，主进程负责拼接、去重、记住位置 */
+  saveExportTo(input: { dir: string; name: string }, bytes: Uint8Array, opts?: { reveal?: boolean; overwrite?: boolean }): Promise<{ ok: boolean; path?: string; error?: string }>
   /** 把预览帧等二进制写入工作区 assets/ */
   writeAsset(name: string, bytes: Uint8Array): Promise<{ ok: boolean; path: string; error?: string }>
+  /** 把当前画面存成草稿封面（草稿库卡片用） */
+  writeCover(bytes: Uint8Array): Promise<{ ok: boolean; error?: string }>
+
+  /** 导出位置设置 */
+  getExportSettings(): Promise<ExportSettings>
+  setExportSettings(patch: Partial<Pick<ExportSettings, 'dir' | 'askEveryTime' | 'revealAfterExport'>>): Promise<ExportSettings>
+  /** 系统文件夹选择框（只选目录），选完自动记进最近目录 */
+  chooseExportFolder(input?: { defaultPath?: string }): Promise<{ ok: boolean; dir?: string; error?: string }>
+
+  /** ---- 草稿 ---- */
+  listDrafts(): Promise<DraftSummary[]>
+  createDraft(input?: { name?: string; template?: 'blank' | 'demo'; fromId?: string }): Promise<DraftOpResult>
+  openDraft(id: string): Promise<DraftOpResult>
+  renameDraft(id: string, name: string): Promise<DraftOpResult>
+  duplicateDraft(id: string): Promise<DraftOpResult>
+  deleteDraft(id: string): Promise<DraftOpResult>
+  setDraftPinned(id: string, pinned: boolean): Promise<DraftOpResult>
+  revealDraft(id: string): Promise<void>
+  /** 打开（或聚焦）草稿库窗口 */
+  openDraftLibrary(): Promise<void>
+  /** 当前草稿的对话记录（每个草稿各存一份） */
+  readChat(): Promise<ChatMessage[]>
 
   onChat(cb: (msg: ChatMessage) => void): () => void
   onAgentStatus(cb: (status: AgentStatus) => void): () => void
   onSceneChanged(cb: (patch: ScenePatch) => void): () => void
   onExportProgress(cb: (p: ExportProgress) => void): () => void
   onToolInvoke(cb: (inv: ToolInvocation) => Promise<unknown>): () => void
+  /** 草稿增删改后广播（两个窗口都收） */
+  onDraftsChanged(cb: (drafts: DraftSummary[]) => void): () => void
+  /** 主窗口切了草稿 */
+  onDraftOpened(cb: (draft: ActiveDraft) => void): () => void
 }

@@ -41,9 +41,12 @@ for ($i = 1; $i -le $Tries; $i++) {
   }
 
   # ExitCode is unreliable through Start-Process redirection here, so judge by
-  # the artifact we actually care about: out/renderer/index.html must be fresh.
+  # the artifacts we actually care about: out/renderer/index.html (editor) and
+  # out/renderer/drafts.html (draft library window) must both be fresh.
   $html = Join-Path $root 'out\renderer\index.html'
-  $fresh = (Test-Path $html) -and ((Get-Item $html).LastWriteTime -gt $started)
+  $drafts = Join-Path $root 'out\renderer\drafts.html'
+  $fresh = (Test-Path $html) -and ((Get-Item $html).LastWriteTime -gt $started) -and
+           (Test-Path $drafts) -and ((Get-Item $drafts).LastWriteTime -gt $started)
 
   if ($fresh) {
     $secs = ((Get-Date) - $started).TotalSeconds.ToString('0.0')

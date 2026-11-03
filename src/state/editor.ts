@@ -29,7 +29,7 @@ export interface EditorApi {
   canUndo: boolean
   canRedo: boolean
   save(): Promise<void>
-  replaceScene(scene: Scene, opts?: { label?: string; persist?: boolean }): void
+  replaceScene(scene: Scene, opts?: { label?: string; persist?: boolean; resetHistory?: boolean }): void
 }
 
 const Ctx = createContext<EditorApi | null>(null)
@@ -107,13 +107,18 @@ export function useEditorState(initial: Scene): EditorApi {
     })
   }, [refreshFlags, scheduleSave])
 
-  const replaceScene = useCallback((next: Scene, opts?: { label?: string; persist?: boolean }) => {
+  const replaceScene = useCallback((next: Scene, opts?: { label?: string; persist?: boolean; resetHistory?: boolean }) => {
     const now = Date.now()
     const isAi = opts?.label === 'AI 修改'
     const coalesce = isAi && now - aiEditAt.current < 6000
     aiEditAt.current = isAi ? now : 0
     setScene(prev => {
-      if (!coalesce) {
+      if (opts?.resetHistory) {
+        // 切草稿：撤销栈属于上一个草稿，不能带过来（否则 Ctrl+Z 会把旧场景写进新草稿）
+        undoStack.current = []
+        redoStack.current = []
+        refreshFlags()
+      } else if (!coalesce) {
         undoStack.current.push({ scene: prev, label: opts?.label ?? '外部更新', at: now })
         if (undoStack.current.length > 80) undoStack.current.shift()
         redoStack.current = []

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
-  AgentStatus, AppState, ChatMessage, ExportProgress, GewuApi, ScenePatch, ToolInvocation, ToolResult
+  AgentStatus, ActiveDraft, AppState, ChatMessage, DraftOpResult, DraftSummary, ExportProgress,
+  ExportSettings, GewuApi, ScenePatch, ToolInvocation, ToolResult
 } from '@shared/ipc'
 import type { Scene } from '@shared/scene'
 
@@ -23,6 +24,7 @@ const api: GewuApi = {
   pickImage: () => ipcRenderer.invoke('gewu:pick-image'),
   importAsset: () => ipcRenderer.invoke('gewu:import-asset'),
   revealPath: path => ipcRenderer.invoke('gewu:reveal', path),
+  openFolder: path => ipcRenderer.invoke('gewu:open-folder', path),
   listAssets: () => ipcRenderer.invoke('gewu:list-assets'),
   ttsVoices: () => ipcRenderer.invoke('gewu:tts-voices'),
   tts: input => ipcRenderer.invoke('gewu:tts', input),
@@ -36,12 +38,31 @@ const api: GewuApi = {
   chooseExportPath: req => ipcRenderer.invoke('gewu:choose-export-path', req),
   saveExport: (outPath, bytes) => ipcRenderer.invoke('gewu:save-export', outPath, bytes),
   saveWorkspaceExport: (name, bytes) => ipcRenderer.invoke('gewu:save-workspace-export', name, bytes),
+  saveExportTo: (input, bytes, opts) => ipcRenderer.invoke('gewu:save-export-to', input, bytes, opts),
   writeAsset: (name, bytes) => ipcRenderer.invoke('gewu:write-asset', name, bytes),
+  writeCover: bytes => ipcRenderer.invoke('gewu:write-cover', bytes),
+
+  getExportSettings: () => ipcRenderer.invoke('gewu:get-export-settings') as Promise<ExportSettings>,
+  setExportSettings: patch => ipcRenderer.invoke('gewu:set-export-settings', patch) as Promise<ExportSettings>,
+  chooseExportFolder: input => ipcRenderer.invoke('gewu:choose-export-folder', input),
+
+  listDrafts: () => ipcRenderer.invoke('gewu:list-drafts') as Promise<DraftSummary[]>,
+  createDraft: input => ipcRenderer.invoke('gewu:create-draft', input) as Promise<DraftOpResult>,
+  openDraft: id => ipcRenderer.invoke('gewu:open-draft', id) as Promise<DraftOpResult>,
+  renameDraft: (id, name) => ipcRenderer.invoke('gewu:rename-draft', id, name) as Promise<DraftOpResult>,
+  duplicateDraft: id => ipcRenderer.invoke('gewu:duplicate-draft', id) as Promise<DraftOpResult>,
+  deleteDraft: id => ipcRenderer.invoke('gewu:delete-draft', id) as Promise<DraftOpResult>,
+  setDraftPinned: (id, pinned) => ipcRenderer.invoke('gewu:set-draft-pinned', id, pinned) as Promise<DraftOpResult>,
+  revealDraft: id => ipcRenderer.invoke('gewu:reveal-draft', id) as Promise<void>,
+  openDraftLibrary: () => ipcRenderer.invoke('gewu:open-draft-library') as Promise<void>,
+  readChat: () => ipcRenderer.invoke('gewu:read-chat') as Promise<ChatMessage[]>,
 
   onChat: cb => subscribe<ChatMessage>('gewu:chat', cb),
   onAgentStatus: cb => subscribe<AgentStatus>('gewu:agent-status', cb),
   onSceneChanged: cb => subscribe<ScenePatch>('gewu:scene-changed', cb),
   onExportProgress: cb => subscribe<ExportProgress>('gewu:export-progress', cb),
+  onDraftsChanged: cb => subscribe<DraftSummary[]>('gewu:drafts-changed', cb),
+  onDraftOpened: cb => subscribe<ActiveDraft>('gewu:draft-opened', cb),
   onToolInvoke: cb => {
     const listener = async (_e: Electron.IpcRendererEvent, inv: ToolInvocation) => {
       let result: ToolResult

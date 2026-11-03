@@ -1,11 +1,17 @@
-import { useState } from 'react'
-import type { AppState } from '../shared/ipc'
+import { useEffect, useRef, useState } from 'react'
+import type { AppState, DraftSummary } from '../shared/ipc'
 
 interface Props {
   state: AppState
+  drafts: DraftSummary[]
+  switching: boolean
   onOpenSettings(): void
-  onExport(): void
+  onOpenExport(): void
+  onOpenLibrary(): void
+  onOpenDraft(id: string): void
+  onNewDraft(): void
   onNewSession(): void
+  onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
 }
 
 function statusOf(state: AppState): { cls: string; text: string } {
@@ -17,13 +23,50 @@ function statusOf(state: AppState): { cls: string; text: string } {
   return { cls: '', text: detail ?? '未连接' }
 }
 
-export function TitleBar({ state, onOpenSettings, onExport, onNewSession }: Props) {
+function fmtAgo(ts: number): string {
+  if (!ts) return ''
+  const diff = Date.now() - ts
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  const d = new Date(ts)
+  const now = new Date()
+  if (d.toDateString() === now.toDateString()) {
+    return `今天 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+export function TitleBar({
+  state, drafts, switching, onOpenSettings, onOpenExport, onOpenLibrary,
+  onOpenDraft, onNewDraft, onNewSession, onToast
+}: Props) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [draftOpen, setDraftOpen] = useState(false)
+  const barRef = useRef<HTMLDivElement>(null)
   const st = statusOf(state)
   const conn = state.connections.find(c => c.id === state.activeConnectionId)
+  const draft = state.draft
+
+  useEffect(() => {
+    if (!menuOpen && !draftOpen) return
+    const close = (e: MouseEvent) => {
+      if (barRef.current && !barRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+        setDraftOpen(false)
+      }
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [menuOpen, draftOpen])
+
+  // 草稿切换下拉里最多列 8 个：置顶在前，其余按最近修改
+  const recent = [...drafts].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+    return b.updatedAt - a.updatedAt
+  }).slice(0, 8)
 
   return (
-    <header className="titlebar">
+    <header className="titlebar" ref={barRef}>
       <div className="tb-brand">
         <div className="brand-mark">
           <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden>
@@ -47,23 +90,68 @@ export function TitleBar({ state, onOpenSettings, onExport, onNewSession }: Prop
       </div>
 
       <div className="tb-center">
-        <div className="tb-scene">
-          <span className="tb-scene-title">{state.agent.phase === 'error' ? '连接异常' : '工作台'}</span>
-          <span className="tb-sep">/</span>
-          <span className="tb-scene-file mono">scene.json</span>
-        </div>
+        <button
+          className={`tb-draft ${draftOpen ? 'open' : ''}`}
+          onClick={() => { setDraftOpen(v => !v); setMenuOpen(false) }}
+          title="切换草稿（每个草稿有独立的场景、素材和对话）"
+        >
+          <span className="tb-draft-label">草稿</span>
+          <span className="tb-draft-name">{draft?.name ?? '未命名草稿'}</span>
+          {switching
+            ? <span className="spin-dot" />
+            : <svg className="tb-draft-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="m6 9 6 6 6-6" /></svg>}
+        </button>
+        <span className="tb-sep">/</span>
+        <span className="tb-scene-file mono">scene.json</span>
+
+        {draftOpen && (
+          <div className="tb-drafts" onMouseLeave={() => setDraftOpen(false)}>
+            <div className="tb-drafts-head">
+              <span>最近草稿</span>
+              <span className="tiny muted">{drafts.length} 个</span>
+            </div>
+            <div className="tb-drafts-list">
+              {recent.length === 0 && <div className="tb-drafts-empty">还没有草稿</div>}
+              {recent.map(d => (
+                <button
+                  key={d.id}
+                  className={`tb-draft-item ${d.active ? 'on' : ''}`}
+                  onClick={() => { setDraftOpen(false); if (!d.active) onOpenDraft(d.id) }}
+                  title={d.dir}
+                >
+                  <span className="tb-di-main">
+                    <span className="tb-di-name">{d.pinned ? '★ ' : ''}{d.name}</span>
+                    <span className="tb-di-sub">{d.layerCount} 图层 · {fmtAgo(d.updatedAt)}</span>
+                  </span>
+                  {d.active && <span className="badge accent">当前</span>}
+                </button>
+              ))}
+            </div>
+            <div className="tb-drafts-foot">
+              <button className="link" onClick={() => { setDraftOpen(false); onNewDraft() }}>＋ 新建草稿</button>
+              <button className="link" onClick={() => { setDraftOpen(false); onOpenLibrary() }}>打开草稿库…</button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="tb-right">
-        <button className={`tb-status ${st.cls}`} onClick={onOpenSettings} title={state.agent.detail ?? ''}>
+        <button className="tb-status" onClick={onOpenSettings} title={state.agent.detail ?? ''}>
           <span className={`dot ${st.cls}`} />
           <span className="tb-status-text">{st.text}</span>
           {conn && <span className="tb-status-model">{conn.model}</span>}
         </button>
         <div className="tb-actions">
-          <button className="btn sm" onClick={onNewSession} title="清空对话并新建 agent 会话">新会话</button>
-          <button className="btn sm" onClick={() => setMenuOpen(v => !v)} title="更多">⋯</button>
-          <button className="btn primary sm" onClick={onExport}>
+          <button className="btn sm" onClick={onOpenLibrary} title="草稿库（独立窗口）">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="7" height="7" rx="1.4" /><rect x="14" y="4" width="7" height="7" rx="1.4" />
+              <rect x="3" y="13" width="7" height="7" rx="1.4" /><rect x="14" y="13" width="7" height="7" rx="1.4" />
+            </svg>
+            草稿库
+          </button>
+          <button className="btn sm" onClick={onNewSession} title="清空对话并新建 agent 会话（场景不动）">新会话</button>
+          <button className="btn sm" onClick={() => { setMenuOpen(v => !v); setDraftOpen(false) }} title="更多">⋯</button>
+          <button className="btn primary sm" onClick={onOpenExport}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" />
             </svg>
@@ -73,8 +161,11 @@ export function TitleBar({ state, onOpenSettings, onExport, onNewSession }: Prop
         {menuOpen && (
           <div className="tb-menu" onMouseLeave={() => setMenuOpen(false)}>
             <button onClick={() => { void window.gewu.revealPath(state.scenePath); setMenuOpen(false) }}>打开场景文件夹</button>
-            <button onClick={() => { void window.gewu.revealPath(state.workspace); setMenuOpen(false) }}>打开工作区</button>
-            <button onClick={() => { onOpenSettings(); setMenuOpen(false) }}>模型设置</button>
+            <button onClick={() => { void window.gewu.openFolder(state.workspace); setMenuOpen(false) }}>打开草稿目录</button>
+            <button onClick={() => { void window.gewu.openFolder(state.exportSettings.resolvedDir); setMenuOpen(false) }}>打开导出文件夹</button>
+            <button onClick={() => { onOpenLibrary(); setMenuOpen(false) }}>草稿库…</button>
+            <button onClick={() => { onOpenSettings(); setMenuOpen(false) }}>模型设置…</button>
+            <button onClick={() => { setMenuOpen(false); onToast({ text: '提示：每个草稿的对话会单独保存，切回去能接着聊', kind: 'info' }) }}>草稿是怎么存的？</button>
           </div>
         )}
       </div>

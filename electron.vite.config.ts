@@ -31,7 +31,11 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/index.html') }
+        input: {
+          index: resolve(__dirname, 'src/index.html'),
+          // 草稿库是独立窗口（达芬奇「项目管理器」那种），单独一个入口
+          drafts: resolve(__dirname, 'src/drafts.html')
+        }
       }
     },
     plugins: [react()]

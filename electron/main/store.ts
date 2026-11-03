@@ -1,7 +1,7 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname } from 'node:path'
 import { safeStorage, app } from 'electron'
+import { atomicWrite, atomicWriteSync } from './atomic'
 import type { ModelConnection, ProviderKind } from '@shared/ipc'
 
 interface StoredConnection {
@@ -15,6 +15,24 @@ interface StoredConnection {
   contextWindow?: number
 }
 
+export interface StoredExportSettings {
+  /** 固定导出目录；null = 用最近目录 / 系统视频目录 */
+  dir: string | null
+  /** 每次导出都弹位置选择框 */
+  askEveryTime: boolean
+  /** 导出完成后在资源管理器里定位 */
+  revealAfterExport: boolean
+  /** 最近用过的目录，最近的在前 */
+  recentDirs: string[]
+}
+
+const DEFAULT_EXPORT: StoredExportSettings = {
+  dir: null,
+  askEveryTime: true,
+  revealAfterExport: true,
+  recentDirs: []
+}
+
 interface ConfigFile {
   version: 1
   connections: StoredConnection[]
@@ -25,6 +43,8 @@ interface ConfigFile {
    */
   visionConnectionId?: string | null
   lastScenePath?: string
+  /** 导出位置偏好 */
+  exportSettings?: StoredExportSettings
 }
 
 const DEFAULT_CONFIG: ConfigFile = { version: 1, connections: [], activeConnectionId: null }
@@ -41,14 +61,36 @@ export class ConfigStore {
       // 记事本/部分编辑器会写 UTF-8 BOM，JSON.parse 见到就抛，配置会静默变空
       const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as ConfigFile
       if (parsed?.version === 1) this.data = { ...DEFAULT_CONFIG, ...parsed }
-    } catch {
+    } catch (error) {
+      // 别静默吞掉：留一份坏文件副本，下次能查为什么「配置没了」
+      try {
+        const { copyFile } = await import('node:fs/promises')
+        await copyFile(this.file, `${this.file}.bad-${Date.now().toString(36)}`)
+      } catch { /* ignore */ }
+      console.error('config.json 读不出来，已用空配置启动：' + (error instanceof Error ? error.message : String(error)))
       this.data = { ...DEFAULT_CONFIG }
     }
   }
 
-  private async save(): Promise<void> {
-    await mkdir(dirname(this.file), { recursive: true })
-    await writeFile(this.file, JSON.stringify(this.data, null, 2), 'utf8')
+  /**
+   * 保存串行化：同一个文件上并发 writeFile 会互相踩（哪怕各自先写临时文件，
+   * rename 的先后也会让「后发起的旧内容」盖掉「先发起的新内容」）。
+   * 这里用一个 promise 链保证按调用顺序落盘。
+   */
+  private saving: Promise<void> = Promise.resolve()
+
+  private save(): Promise<void> {
+    this.saving = this.saving
+      .then(() => atomicWrite(this.file, JSON.stringify(this.data, null, 2)))
+      .catch(error => { console.error('config.json 保存失败：' + (error instanceof Error ? error.message : String(error))) })
+    return this.saving
+  }
+
+  /** 退出前兜底：把最后一次改动同步落盘，别丢在 promise 链里 */
+  flushSync(): void {
+    try {
+      atomicWriteSync(this.file, JSON.stringify(this.data, null, 2))
+    } catch { /* ignore */ }
   }
 
   private encrypt(plain: string): string {
@@ -159,4 +201,53 @@ export class ConfigStore {
 
   getLastScenePath(): string | undefined { return this.data.lastScenePath }
   setLastScenePath(p: string): void { this.data.lastScenePath = p; void this.save() }
+
+  // ---------- 导出位置 ----------
+
+  getExportSettings(): StoredExportSettings {
+    const s = this.data.exportSettings
+    return {
+      dir: typeof s?.dir === 'string' && s.dir.trim() ? s.dir.trim() : null,
+      askEveryTime: s?.askEveryTime !== false,
+      revealAfterExport: s?.revealAfterExport !== false,
+      recentDirs: Array.isArray(s?.recentDirs) ? s!.recentDirs.filter(d => typeof d === 'string' && d.trim()).slice(0, 8) : []
+    }
+  }
+
+  setExportSettings(patch: Partial<StoredExportSettings>): StoredExportSettings {
+    const cur = this.getExportSettings()
+    const next: StoredExportSettings = {
+      dir: patch.dir !== undefined ? (patch.dir && patch.dir.trim() ? patch.dir.trim() : null) : cur.dir,
+      askEveryTime: patch.askEveryTime !== undefined ? Boolean(patch.askEveryTime) : cur.askEveryTime,
+      revealAfterExport: patch.revealAfterExport !== undefined ? Boolean(patch.revealAfterExport) : cur.revealAfterExport,
+      recentDirs: cur.recentDirs
+    }
+    if (next.dir) next.recentDirs = dedupeDirs([next.dir, ...next.recentDirs])
+    this.data.exportSettings = next
+    void this.save()
+    return next
+  }
+
+  /** 记住这次导出/选择用的目录，下次一点就回到这里 */
+  rememberExportDir(dir: string): StoredExportSettings {
+    const cur = this.getExportSettings()
+    const next = { ...cur, recentDirs: dedupeDirs([dir, ...cur.recentDirs]) }
+    this.data.exportSettings = next
+    void this.save()
+    return next
+  }
+}
+
+function dedupeDirs(list: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of list) {
+    const d = raw.trim().replace(/[\\/]+$/, '')
+    if (!d) continue
+    const key = d.toLowerCase() // Windows 路径大小写不敏感
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(d)
+  }
+  return out.slice(0, 8)
 }

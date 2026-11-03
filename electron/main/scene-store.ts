@@ -1,10 +1,16 @@
-import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises'
+import { readFile, mkdir, readdir, stat } from 'node:fs/promises'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { join, relative, extname } from 'node:path'
+import { atomicWrite } from './atomic'
 import { emptyScene, type Scene, type SceneLayer } from '@shared/scene'
 import { demoScene } from '@shared/demo'
 
 const SCENE_FILE = 'scene.json'
+
+/** 场景写盘统一走这里：原子写，避免半截 JSON 把用户的场景弄没 */
+export async function writeSceneFile(path: string, scene: Scene): Promise<void> {
+  await atomicWrite(path, JSON.stringify(scene, null, 2))
+}
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i
 
@@ -167,11 +173,11 @@ export class SceneStore {
       const target = join(this.workspace, 'AGENTS.md')
       const source = await readFile(this.instructionsSource, 'utf8')
       const current = existsSync(target) ? await readFile(target, 'utf8') : ''
-      if (current !== source) await writeFile(target, source, 'utf8')
+      if (current !== source) await atomicWrite(target, source)
     }
     if (!existsSync(this.scenePath)) {
       const scene = demoScene()
-      await writeFile(this.scenePath, JSON.stringify(scene, null, 2), 'utf8')
+      await writeSceneFile(this.scenePath, scene)
     }
     this.startWatch()
   }
@@ -187,6 +193,15 @@ export class SceneStore {
 
   setExternalChangeHandler(fn: (scene: Scene) => void): void {
     this.onExternalChange = fn
+  }
+
+  /** 切草稿时用：停掉旧目录的 watch，别把旧草稿的改动推给新草稿 */
+  dispose(): void {
+    try { this.watcher?.close() } catch { /* ignore */ }
+    this.watcher = null
+    this.onExternalChange = null
+    this.cache = null
+    this.cacheMtime = 0
   }
 
   private async emitExternal(): Promise<void> {
@@ -216,7 +231,7 @@ export class SceneStore {
 
   async write(scene: Scene): Promise<void> {
     const normalized = normalizeScene(scene)
-    await writeFile(this.scenePath, JSON.stringify(normalized, null, 2), 'utf8')
+    await writeSceneFile(this.scenePath, normalized)
     const s = await stat(this.scenePath)
     this.cache = normalized
     this.cacheMtime = s.mtimeMs
