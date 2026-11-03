@@ -56,6 +56,7 @@
 - `start` / `end`：可见区间（秒），省略表示整段
 - `x` / `y`：位置（设计坐标）。typed 元素的 `x/y` 是**左上角**；`code` 图层的 `x/y` 是**平移量**
 - `w` / `h`：typed 元素的宽高（必填，否则尺寸为 0）
+- `children`：组合内的子元素，**坐标相对组合左上角**。组合的 `x/y` 写 `0` 时，子元素就写绝对坐标（最不容易错）
 - `rotation`：旋转角度（度，绕元素中心）；`scale`：缩放倍数（绕元素中心）
 - `blend`：`source-over` | `lighter` | `screen` | `multiply` | `overlay`
 - `draw`：函数体源码（不是箭头函数）。只有 `kind:"code"`（或需要动画的 `group`）才用。
@@ -86,8 +87,7 @@
   "image": { "src": "assets/ref.png", "fit": "contain", "radius": 12 } }
 ```
 
-`shape.type`：`rect` | `ellipse` | `triangle` | `line` | `arrow`。
-`line`/`arrow` 从盒子左上角画到右下角（用 `w/h` 表示方向与长度）。
+`shape.type`：`rect` | `ellipse` | `triangle` | `line` | `arrow`。`line`/`arrow` 从盒子左上角画到右下角（用 `w/h` 表示方向与长度）。
 `text` 的 `align` 是 `left` | `center` | `right`，`maxWidth` 省略时用 `w` 自动换行。
 
 ## 图层绘制代码的可用变量

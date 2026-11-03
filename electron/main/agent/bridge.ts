@@ -489,8 +489,9 @@ export class AgentBridge {
         '1. 每个有语义的对象（标题、轴、箭头、圆、标签……）单独成一个元素，不要把所有绘制塞进一段 draw。',
         '2. 能写成 typed 元素就不要写代码：文字用 kind:"text"+text{}；图片用 kind:"image"+image{}；矩形/圆/线/箭头用 kind:"shape"+shape{}。',
         '3. 同一组语义相关的元素放进 kind:"group" 的 children，并给组合起人类能懂的名字（如「标题组」「受力分析图」）。',
-        '4. 元素坐标用画布绝对设计坐标（1920×1080），x/y/w/h 必填；需要旋转时用 rotation（度）。',
-        '5. 动画（随时间变化的部分）才用 draw 代码，并让它只负责动画，不要重复画静态内容。',
+        '4. 顶层元素的 x/y 用画布绝对设计坐标（1920×1080），x/y/w/h 必填；需要旋转时用 rotation（度）。',
+        '5. 组合的 x/y 建议写 0，子元素坐标相对组合左上角——组合 x/y 为 0 时子元素就直接写绝对坐标，最不容易错。',
+        '6. 动画（随时间变化的部分）才用 draw 代码，并让它只负责动画，不要重复画静态内容。',
         target ? `目标图层：${target.layer.id}（${target.layer.name}，路径 ${target.path.join(' > ')}）` : '目标：整个场景',
         `当前场景结构（scene_inspect 可看到完整信息）：${collectIds(scene.layers).length} 个元素，顶层 ${scene.layers.length} 个。`,
         '写完后调用 scene_render_frame 在 2–3 个时间点自检，确认画面和原来一致或更好。'
