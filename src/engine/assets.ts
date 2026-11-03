@@ -55,20 +55,51 @@ export function assetImage(name: string): HTMLImageElement | null {
   return imageFor(name)?.el ?? null
 }
 
-/** 从绘制代码里粗略扫出引用的资源名 */
-export function scanAssetRefs(scene: { layers: { draw?: string }[]; audio?: { src?: string }[] }): string[] {
+/** 等一张图加载完并拿到原始尺寸（拖素材进画布时用） */
+export async function measureImage(name: string, timeoutMs = 3000): Promise<{ width: number; height: number } | null> {
+  const entry = load(assetUrl(name))
+  if (entry.state === 'ok') return { width: entry.width, height: entry.height }
+  if (entry.state === 'error') return null
+  return new Promise(resolve => {
+    let done = false
+    const finish = (v: { width: number; height: number } | null) => {
+      if (done) return
+      done = true
+      resolve(v)
+    }
+    entry.el.addEventListener('load', () => finish({ width: entry.el.naturalWidth, height: entry.el.naturalHeight }), { once: true })
+    entry.el.addEventListener('error', () => finish(null), { once: true })
+    setTimeout(() => finish(entry.state === 'ok' ? { width: entry.width, height: entry.height } : null), timeoutMs)
+  })
+}
+
+/** 从绘制代码 / 图片元素里粗略扫出引用的资源名（含嵌套组合） */
+export function scanAssetRefs(scene: { layers: SceneLayerLike[]; audio?: { src?: string }[] }): string[] {
   const found = new Set<string>()
   const re = /(?:asset\(\s*|g\.image\(\s*|g\.video\(\s*)['"`]([^'"`]+)['"`]/g
-  for (const layer of scene.layers) {
-    if (!layer.draw) continue
-    let m: RegExpExecArray | null
-    while ((m = re.exec(layer.draw))) {
-      const name = m[1]
-      if (!/\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(name)) continue
-      found.add(name)
+  const walk = (layers: SceneLayerLike[] | undefined) => {
+    for (const layer of layers ?? []) {
+      if (layer.image?.src && /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(layer.image.src)) found.add(layer.image.src)
+      if (layer.draw) {
+        re.lastIndex = 0
+        let m: RegExpExecArray | null
+        while ((m = re.exec(layer.draw))) {
+          const name = m[1]
+          if (!/\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(name)) continue
+          found.add(name)
+        }
+      }
+      walk(layer.children)
     }
   }
+  walk(scene.layers)
   return [...found]
+}
+
+interface SceneLayerLike {
+  draw?: string
+  image?: { src?: string }
+  children?: SceneLayerLike[]
 }
 
 /** 等所有图片加载完（失败也算完，绘制时会画占位） */

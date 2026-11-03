@@ -1,4 +1,5 @@
 import type { Scene, SceneLayer } from '../shared/scene'
+import { flatten } from '../shared/layers'
 import { renderScene } from './render'
 import { assetImage, preloadScene, scanAssetRefs } from './assets'
 
@@ -87,6 +88,8 @@ export function imageToAnsiPreview(data: Uint8ClampedArray, w: number, h: number
 export interface LayerBox {
   id: string
   name: string
+  /** 路径（嵌套元素用） */
+  path: string[]
   x: number
   y: number
   w: number
@@ -104,7 +107,8 @@ export function layerBoxes(scene: Scene, t: number, sampleWidth = 160): LayerBox
   tmp.height = H
   const ctx = tmp.getContext('2d', { willReadFrequently: true })
   if (!ctx) return out
-  for (const layer of scene.layers) {
+  for (const flat of flatten(scene.layers)) {
+    const layer = flat.layer
     if (layer.visible === false) continue
     if (layer.start !== undefined && t < layer.start) continue
     if (layer.end !== undefined && t > layer.end) continue
@@ -113,7 +117,7 @@ export function layerBoxes(scene: Scene, t: number, sampleWidth = 160): LayerBox
     ctx.scale(W / scene.canvas.width, H / scene.canvas.height)
     renderScene({
       scene, ctx, width: scene.canvas.width, height: scene.canvas.height, t,
-      onlyLayerId: layer.id, drawBackground: false, onLayerError: () => undefined,
+      onlyPath: flat.path, drawBackground: false, onLayerError: () => undefined,
       asset: assetImage
     })
     ctx.restore()
@@ -136,6 +140,7 @@ export function layerBoxes(scene: Scene, t: number, sampleWidth = 160): LayerBox
     out.push({
       id: layer.id,
       name: layer.name,
+      path: flat.path,
       x: Math.round(minX * sx),
       y: Math.round(minY * sy),
       w: Math.round((maxX - minX + 1) * sx),
@@ -184,7 +189,7 @@ export class SceneRenderer {
     return preloadScene(scene)
   }
 
-  render(scene: Scene, t: number, opts?: { hideLayerIds?: Set<string>; onlyLayerId?: string }): void {
+  render(scene: Scene, t: number, opts?: { hideLayerIds?: Set<string>; onlyLayerId?: string; onlyPath?: string[] }): void {
     this.resize(scene.canvas.width, scene.canvas.height)
     this.lastErrors = []
     this.ctx.save()
@@ -197,6 +202,7 @@ export class SceneRenderer {
       t,
       hideLayerIds: opts?.hideLayerIds,
       onlyLayerId: opts?.onlyLayerId,
+      onlyPath: opts?.onlyPath,
       onLayerError: (layerId, error) => {
         if (!this.lastErrors.some(e => e.layerId === layerId)) this.lastErrors.push({ layerId, error })
       },
@@ -246,8 +252,13 @@ export class SceneRenderer {
   }
 }
 
-/** 预览用：把离屏 canvas 画到显示 canvas 上（含 letterbox） */
-export function blitTo(canvas: HTMLCanvasElement, source: HTMLCanvasElement, bg = '#0a0e13'): void {
+/** 预览用：把离屏 canvas 画到显示 canvas 上（含 letterbox + 可选缩放平移） */
+export function blitTo(
+  canvas: HTMLCanvasElement,
+  source: HTMLCanvasElement,
+  bg = '#0a0e13',
+  view?: { zoom: number; panX: number; panY: number }
+): void {
   const ctx = canvas.getContext('2d')!
   const dpr = window.devicePixelRatio || 1
   const cw = canvas.clientWidth
@@ -259,11 +270,12 @@ export function blitTo(canvas: HTMLCanvasElement, source: HTMLCanvasElement, bg 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.fillStyle = bg
   ctx.fillRect(0, 0, cw, ch)
-  const scale = Math.min(cw / source.width, ch / source.height)
+  const base = Math.min(cw / source.width, ch / source.height)
+  const scale = base * (view?.zoom ?? 1)
   const dw = source.width * scale
   const dh = source.height * scale
-  const dx = (cw - dw) / 2
-  const dy = (ch - dh) / 2
+  const dx = (cw - dw) / 2 + (view?.panX ?? 0)
+  const dy = (ch - dh) / 2 + (view?.panY ?? 0)
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, dx, dy, dw, dh)

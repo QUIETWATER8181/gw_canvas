@@ -4,8 +4,8 @@ interface Props {
   onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
   showBounds: boolean
   onToggleBounds(): void
-  zoom: 'fit' | number
-  onZoom(z: 'fit' | number): void
+  zoom: number
+  onZoom(z: number): void
   exportJob: { running: boolean; frame: number; total: number; phase: string } | null
 }
 
@@ -36,8 +36,10 @@ export function StageToolbar({ showBounds, onToggleBounds, zoom, onZoom, exportJ
           边界
         </button>
         <div className="zoom-group">
-          <button className={`tb-chip ${zoom === 'fit' ? 'on' : ''}`} onClick={() => onZoom('fit')}>适应</button>
-          <button className={`tb-chip ${zoom === 1 ? 'on' : ''}`} onClick={() => onZoom(1)}>100%</button>
+          <button className={`tb-chip ${Math.abs(zoom - 1) < 0.01 ? 'on' : ''}`} onClick={() => onZoom(1)}>适应</button>
+          <button className="tb-chip" onClick={() => onZoom(Math.max(0.2, zoom / 1.25))} title="缩小">－</button>
+          <span className="zoom-val mono">{Math.round(zoom * 100)}%</span>
+          <button className="tb-chip" onClick={() => onZoom(Math.min(8, zoom * 1.25))} title="放大">＋</button>
         </div>
       </div>
     </div>

@@ -1,21 +1,50 @@
 import { useMemo, useState } from 'react'
+import type { SceneLayer } from '../shared/scene'
+import { KIND_LABEL, layerKind } from '../shared/scene'
 import { useEditor, newLayerId } from '../state/editor'
+import { flatten } from '../shared/layers'
 import { SceneRenderer } from '../engine/preview'
+
+interface Row {
+  layer: SceneLayer
+  path: string[]
+  parentPath: string[]
+  index: number
+  depth: number
+  hasChildren: boolean
+}
 
 export function LayerList() {
   const editor = useEditor()
-  const { scene, selectedLayerId } = editor.state
-  const [dragIdx, setDragIdx] = useState<number | null>(null)
-  const [overIdx, setOverIdx] = useState<number | null>(null)
+  const { scene, selection } = editor.state
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [dragPath, setDragPath] = useState<string | null>(null)
+  const [overPath, setOverPath] = useState<string | null>(null)
 
   const renderer = useMemo(() => new SceneRenderer(scene.canvas.width, scene.canvas.height), [scene.canvas.width, scene.canvas.height])
+
+  /** 顶层在上：先深度优先展开，再按「同层倒序」排，保证上层覆盖下层 */
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = []
+    const walk = (layers: SceneLayer[], parentPath: string[], depth: number) => {
+      for (let i = layers.length - 1; i >= 0; i--) {
+        const layer = layers[i]
+        const path = [...parentPath, layer.id]
+        out.push({ layer, path, parentPath, index: i, depth, hasChildren: Boolean(layer.children?.length) })
+        if (layer.children?.length && !collapsed.has(layer.id)) walk(layer.children, path, depth + 1)
+      }
+    }
+    walk(scene.layers, [], 0)
+    return out
+  }, [scene.layers, collapsed])
+
   const thumbs = useMemo(() => {
     const map = new Map<string, string>()
-    for (const l of scene.layers) {
-      try { map.set(l.id, renderer.layerThumb(scene, l, editor.state.time)) } catch { /* ignore */ }
+    for (const r of rows) {
+      try { map.set(r.layer.id, renderer.layerThumb(scene, r.layer, editor.state.time)) } catch { /* ignore */ }
     }
     return map
-  }, [scene, renderer, editor.state.time])
+  }, [rows, scene, renderer, editor.state.time])
 
   function addLayer() {
     const id = newLayerId(scene)
@@ -34,33 +63,63 @@ export function LayerList() {
         <button className="btn sm" onClick={addLayer}>＋ 新图层</button>
       </div>
       <div className="ll-scroll">
-        {[...scene.layers].reverse().map((layer, revIdx) => {
-          const idx = scene.layers.length - 1 - revIdx
-          const sel = layer.id === selectedLayerId
+        {rows.map(row => {
+          const layer = row.layer
+          const sel = selection.includes(layer.id)
+          const kind = layerKind(layer)
           return (
             <div
               key={layer.id}
-              className={`ll-item ${sel ? 'sel' : ''} ${overIdx === idx ? 'over' : ''}`}
+              className={`ll-item ${sel ? 'sel' : ''} ${overPath === row.path.join('/') ? 'over' : ''}`}
+              style={{ paddingLeft: `${6 + row.depth * 14}px` }}
               draggable
-              onDragStart={() => setDragIdx(idx)}
-              onDragOver={e => { e.preventDefault(); setOverIdx(idx) }}
-              onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
-              onDrop={() => {
-                if (dragIdx !== null && dragIdx !== idx) editor.reorderLayer(dragIdx, idx)
-                setDragIdx(null); setOverIdx(null)
+              onDragStart={e => { setDragPath(row.path.join('/')); e.dataTransfer.effectAllowed = 'move' }}
+              onDragOver={e => { e.preventDefault(); setOverPath(row.path.join('/')) }}
+              onDragLeave={() => setOverPath(p => (p === row.path.join('/') ? null : p))}
+              onDragEnd={() => { setDragPath(null); setOverPath(null) }}
+              onDrop={e => {
+                e.preventDefault()
+                if (!dragPath) return
+                const from = dragPath.split('/')
+                // 拖到某行上 = 插到该行前面（同父级）
+                editor.moveTo(from[from.length - 1], row.parentPath.length ? row.parentPath[row.parentPath.length - 1] : null, row.index + 1)
+                setDragPath(null); setOverPath(null)
               }}
-              onClick={() => editor.select(layer.id)}
+              onClick={e => {
+                if (e.ctrlKey || e.metaKey) editor.toggleSelect(layer.id)
+                else editor.select(layer.id)
+              }}
             >
+              {row.hasChildren ? (
+                <button
+                  className={`ll-chev ${collapsed.has(layer.id) ? 'closed' : ''}`}
+                  onClick={e => {
+                    e.stopPropagation()
+                    setCollapsed(prev => {
+                      const next = new Set(prev)
+                      if (next.has(layer.id)) next.delete(layer.id)
+                      else next.add(layer.id)
+                      return next
+                    })
+                  }}
+                >
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l8 7-8 7z" /></svg>
+                </button>
+              ) : <span className="ll-chev-space" />}
               <div className="ll-thumb">
                 {thumbs.get(layer.id) ? <img src={thumbs.get(layer.id)} alt="" /> : <span className="ll-thumb-empty" />}
               </div>
               <div className="ll-meta">
-                <div className="ll-name">{layer.name}</div>
+                <div className="ll-name">
+                  <span className="kind-pill tiny-pill">{KIND_LABEL[kind]}</span>
+                  {layer.name}
+                </div>
                 <div className="ll-sub mono">
                   {layer.start !== undefined || layer.end !== undefined
                     ? `${(layer.start ?? 0).toFixed(1)}–${(layer.end ?? scene.canvas.duration).toFixed(1)}s`
                     : '整段'}
                   {layer.opacity !== undefined && layer.opacity !== 1 ? ` · ${Math.round(layer.opacity * 100)}%` : ''}
+                  {layer.children?.length ? ` · ${layer.children.length} 元素` : ''}
                 </div>
               </div>
               <button

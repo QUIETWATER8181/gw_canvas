@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useEditor } from '../state/editor'
+import type { SceneLayer, ShapeType } from '../shared/scene'
+import { nextLayerId } from '../shared/layers'
 import { QUICK_STARTS } from '../content/quickstarts'
 import { keyframePrompt, referencePrompt } from '../content/prompts'
+import { DRAG_MIME } from './Timeline'
+import { measureImage } from '../engine/assets'
 
 interface Props {
   onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
@@ -72,8 +76,85 @@ export function LeftPanel({ onToast }: Props) {
     onToast({ text: `已加到音轨，起点 ${start}s`, kind: 'ok' })
   }
 
-  function patchAudio(id: string, patch: { start?: number; volume?: number }) {
-    editor.updateScene(
+  /** 手动加一个文本元素（放在画面中心偏上） */
+  function addTextLayer() {
+    const scene = editor.state.scene
+    const W = scene.canvas.width
+    const H = scene.canvas.height
+    const id = nextLayerId(scene, 'text')
+    const layer: SceneLayer = {
+      id,
+      name: '文字',
+      kind: 'text',
+      x: Math.round(W * 0.15),
+      y: Math.round(H * 0.4),
+      w: Math.round(W * 0.7),
+      h: 120,
+      text: { content: '双击编辑文字', size: 72, weight: 700, color: scene.theme.fg, align: 'center', lineHeight: 1.35 },
+      start: 0,
+      end: scene.canvas.duration
+    }
+    editor.addLayer(layer)
+    onToast({ text: '已添加文字，双击画面上的文字可直接编辑', kind: 'ok' })
+  }
+
+  /** 手动加一个形状元素 */
+  function addShapeLayer(type: ShapeType) {
+    const scene = editor.state.scene
+    const W = scene.canvas.width
+    const H = scene.canvas.height
+    const id = nextLayerId(scene, type)
+    const w = type === 'line' || type === 'arrow' ? 360 : 320
+    const h = type === 'line' || type === 'arrow' ? 120 : 220
+    const layer: SceneLayer = {
+      id,
+      name: type === 'rect' ? '矩形' : type === 'ellipse' ? '椭圆' : type === 'arrow' ? '箭头' : type === 'line' ? '直线' : '三角形',
+      kind: 'shape',
+      x: Math.round((W - w) / 2),
+      y: Math.round((H - h) / 2),
+      w,
+      h,
+      shape: { type, fill: type === 'line' || type === 'arrow' ? undefined : scene.theme.accent, stroke: scene.theme.accent, strokeWidth: 4, radius: type === 'rect' ? 12 : 0 },
+      start: 0,
+      end: scene.canvas.duration
+    }
+    editor.addLayer(layer)
+    onToast({ text: '已添加形状，可在右侧属性里改颜色', kind: 'ok' })
+  }
+
+  async function addImageFromPicker() {
+    const picked = await window.gewu.pickImage()
+    if (!picked) return
+    const base64 = picked.dataUrl.split(',')[1]
+    if (!base64) return
+    const bytes = Uint8Array.from(atob(base64), ch => ch.charCodeAt(0))
+    const safe = picked.name.replace(/[^\w.\-]+/g, '_')
+    const res = await window.gewu.writeAsset(safe, bytes)
+    if (!res.ok) { onToast({ text: res.error ?? '保存图片失败', kind: 'err' }); return }
+    await refreshAssets()
+    const scene = editor.state.scene
+    const size = await measureImage(safe)
+    let w = size?.width ?? 640
+    let h = size?.height ?? 360
+    const k = Math.min(1, (scene.canvas.width * 0.6) / w, (scene.canvas.height * 0.6) / h)
+    w = Math.round(w * k)
+    h = Math.round(h * k)
+    const layer: SceneLayer = {
+      id: nextLayerId(scene, 'img'),
+      name: safe.replace(/\.[^.]+$/, ''),
+      kind: 'image',
+      x: Math.round((scene.canvas.width - w) / 2),
+      y: Math.round((scene.canvas.height - h) / 2),
+      w, h,
+      image: { src: safe, fit: 'stretch' },
+      start: 0,
+      end: scene.canvas.duration
+    }
+    editor.addLayer(layer)
+    onToast({ text: '已添加图片', kind: 'ok' })
+  }
+
+  function patchAudio(id: string, patch: { start?: number; volume?: number }) {    editor.updateScene(
       s => ({ ...s, audio: s.audio.map(t => (t.id === id ? { ...t, ...patch } : t)) }),
       { label: '调整音轨' }
     )
@@ -234,7 +315,24 @@ export function LeftPanel({ onToast }: Props) {
               {assets.length === 0 && <div className="lp-empty">还没有素材。导入图片或音频后，agent 可以用 <code>asset()</code> 引用。</div>}
               <div className="asset-grid">
                 {assets.map(a => (
-                  <div key={a.path} className="asset-card">
+                  <div
+                    key={a.path}
+                    className="asset-card"
+                    draggable
+                    onDragStart={e => {
+                      const kind = /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(a.name)
+                        ? 'image'
+                        : /\.(mp4|mov|webm|mkv)$/i.test(a.name)
+                          ? 'video'
+                          : /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(a.name)
+                            ? 'audio'
+                            : 'other'
+                      e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ name: a.path, kind }))
+                      e.dataTransfer.setData('text/plain', a.path)
+                      e.dataTransfer.effectAllowed = 'copy'
+                    }}
+                    title="拖到画面或时间轴轨道上"
+                  >
                     <div className="asset-thumb" style={{ backgroundImage: /\.(png|jpe?g|webp|gif|svg)$/i.test(a.name) ? `url("gewu://workspace/${a.path}")` : undefined, backgroundSize: 'cover', backgroundPosition: 'center' }} />
                     <div className="asset-name" title={a.name}>{a.name}</div>
                     {isAudio(a.name) && (
@@ -242,6 +340,22 @@ export function LeftPanel({ onToast }: Props) {
                     )}
                   </div>
                 ))}
+              </div>
+              <div className="lp-tip">把素材拖到画面上 = 按原始比例摆到该位置；拖到时间轴轨道 = 从落点时间开始。</div>
+            </div>
+
+            <div className="lp-section">
+              <div className="lp-section-head">
+                <span>手动添加</span>
+                <span className="tiny muted">不依赖 AI</span>
+              </div>
+              <div className="add-grid">
+                <button className="btn sm" onClick={() => addTextLayer()}>＋ 文字</button>
+                <button className="btn sm" onClick={() => addShapeLayer('rect')}>＋ 矩形</button>
+                <button className="btn sm" onClick={() => addShapeLayer('ellipse')}>＋ 椭圆</button>
+                <button className="btn sm" onClick={() => addShapeLayer('arrow')}>＋ 箭头</button>
+                <button className="btn sm" onClick={() => addShapeLayer('line')}>＋ 直线</button>
+                <button className="btn sm" onClick={() => void addImageFromPicker()}>＋ 图片</button>
               </div>
             </div>
 

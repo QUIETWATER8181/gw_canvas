@@ -1,10 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { Scene, SceneLayer } from '../shared/scene'
 import { emptyScene } from '../shared/scene'
+import {
+  cloneTree, collectIds, findLayer, getAt, insertAt, moveAt, nextLayerId,
+  removeAt, removeMany, replaceAt, selfBox, unionBox, updateAt
+} from '../shared/layers'
 
 export interface EditorState {
   scene: Scene
+  /** 主选中（最后点的那个），兼容老代码 */
   selectedLayerId: string | null
+  /** 多选；顺序 = 选择先后 */
+  selection: string[]
   time: number
   playing: boolean
   dirty: boolean
@@ -17,12 +24,22 @@ interface HistoryEntry { scene: Scene; label: string; at: number }
 export interface EditorApi {
   state: EditorState
   select(id: string | null): void
+  selectMany(ids: string[]): void
+  toggleSelect(id: string): void
   setTime(t: number): void
   setPlaying(p: boolean): void
   updateScene(updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean; mergeMs?: number }): void
   updateLayer(id: string, patch: Partial<SceneLayer>, opts?: { label?: string; mergeMs?: number }): void
-  addLayer(layer: SceneLayer): void
+  addLayer(layer: SceneLayer, parentId?: string | null): void
   removeLayer(id: string): void
+  removeLayers(ids: string[]): void
+  duplicate(ids: string[]): string[]
+  group(ids: string[]): string | null
+  ungroup(id: string): void
+  /** 在兄弟节点里上下移动（-1 下移一层 / +1 上移一层） */
+  reorder(id: string, dir: -1 | 1): void
+  /** 把节点移到新父级（null=根）的指定位置 */
+  moveTo(id: string, parentId: string | null, index: number): void
   reorderLayer(from: number, to: number): void
   undo(): void
   redo(): void
@@ -44,7 +61,10 @@ export const EditorContext = Ctx
 
 export function useEditorState(initial: Scene): EditorApi {
   const [scene, setScene] = useState<Scene>(initial)
-  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(initial.layers[0]?.id ?? null)
+  const [selection, setSelection] = useState<string[]>(() => {
+    const first = initial.layers[0]?.id
+    return first ? [first] : []
+  })
   const [time, setTimeState] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -60,6 +80,8 @@ export function useEditorState(initial: Scene): EditorApi {
   sceneRef.current = scene
   const timeRef = useRef(time)
   timeRef.current = time
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
   /** agent 一轮里可能连续改好几次，合并成一条撤销记录 */
   const aiEditAt = useRef(0)
 
@@ -130,17 +152,151 @@ export function useEditorState(initial: Scene): EditorApi {
   }, [refreshFlags, scheduleSave])
 
   const updateLayer = useCallback((id: string, patch: Partial<SceneLayer>, opts?: { label?: string; mergeMs?: number }) => {
-    updateScene(s => ({ ...s, layers: s.layers.map(l => (l.id === id ? { ...l, ...patch } : l)) }), opts)
+    updateScene(s => {
+      const hit = findLayer(s.layers, id)
+      if (!hit) return s
+      return { ...s, layers: updateAt(s.layers, hit.path, patch) }
+    }, opts)
   }, [updateScene])
 
-  const addLayer = useCallback((layer: SceneLayer) => {
-    updateScene(s => ({ ...s, layers: [...s.layers, layer] }), { label: '新增图层' })
-    setSelectedLayerId(layer.id)
+  const select = useCallback((id: string | null) => {
+    setSelection(id ? [id] : [])
+  }, [])
+
+  const selectMany = useCallback((ids: string[]) => {
+    setSelection([...new Set(ids.filter(Boolean))])
+  }, [])
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelection(prev => (prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id]))
+  }, [])
+
+  const addLayer = useCallback((layer: SceneLayer, parentId?: string | null) => {
+    updateScene(s => {
+      const hit = parentId ? findLayer(s.layers, parentId) : null
+      if (hit) {
+        const kids = hit.layer.children ?? []
+        return { ...s, layers: updateAt(s.layers, hit.path, { children: [...kids, layer] }) }
+      }
+      return { ...s, layers: [...s.layers, layer] }
+    }, { label: '新增图层' })
+    setSelection([layer.id])
   }, [updateScene])
 
-  const removeLayer = useCallback((id: string) => {
-    updateScene(s => ({ ...s, layers: s.layers.filter(l => l.id !== id) }), { label: '删除图层' })
-    setSelectedLayerId(prev => (prev === id ? null : prev))
+  const removeLayers = useCallback((ids: string[]) => {
+    if (!ids.length) return
+    updateScene(s => {
+      const paths = ids.map(id => findLayer(s.layers, id)?.path).filter((p): p is string[] => Boolean(p))
+      if (!paths.length) return s
+      return { ...s, layers: removeMany(s.layers, paths) }
+    }, { label: ids.length > 1 ? '删除多个图层' : '删除图层' })
+    setSelection(prev => prev.filter(id => !ids.includes(id)))
+  }, [updateScene])
+
+  const removeLayer = useCallback((id: string) => removeLayers([id]), [removeLayers])
+
+  const duplicate = useCallback((ids: string[]): string[] => {
+    const created: string[] = []
+    updateScene(s => {
+      let layers = s.layers
+      const used = new Set(collectIds(s.layers))
+      const makeId = () => {
+        let i = used.size + 1
+        let id = `copy_${i}`
+        while (used.has(id)) id = `copy_${++i}`
+        used.add(id)
+        return id
+      }
+      for (const id of ids) {
+        const hit = findLayer(layers, id)
+        if (!hit) continue
+        const copy = cloneTree(hit.layer, makeId)
+        copy.name = `${hit.layer.name} 副本`
+        created.push(copy.id)
+        layers = insertAt(layers, hit.parentPath, hit.index + 1, copy)
+      }
+      return { ...s, layers }
+    }, { label: '复制图层' })
+    if (created.length) setSelection(created)
+    return created
+  }, [updateScene])
+
+  const group = useCallback((ids: string[]): string | null => {
+    const s = sceneRef.current
+    if (ids.length < 2) return null
+    const hits = ids.map(id => findLayer(s.layers, id)).filter((h): h is NonNullable<typeof h> => Boolean(h))
+    if (hits.length < 2) return null
+    const parentPath = hits[0].parentPath
+    const siblings = hits.filter(h => h.parentPath.join('/') === parentPath.join('/'))
+    if (siblings.length < 2) return null
+    const minIndex = Math.min(...siblings.map(h => h.index))
+    const groupId = nextLayerId(s, 'group')
+    // 组合要有自己的盒子，才能整体旋转/缩放；子元素坐标转成相对组合左上角
+    const box = unionBox(siblings.map(h => selfBox(h.layer) ?? h.layer.bounds ?? null))
+    const gx = box ? Math.round(box.x) : 0
+    const gy = box ? Math.round(box.y) : 0
+    const children = siblings
+      .sort((a, b) => a.index - b.index)
+      .map(h => ({
+        ...h.layer,
+        x: Math.round((Number(h.layer.x) || 0) - gx),
+        y: Math.round((Number(h.layer.y) || 0) - gy)
+      }))
+    const groupLayer: SceneLayer = {
+      id: groupId,
+      name: '组合',
+      kind: 'group',
+      x: gx,
+      y: gy,
+      ...(box ? { w: Math.round(box.w), h: Math.round(box.h) } : {}),
+      children
+    }
+    updateScene(sc => {
+      let layers = removeMany(sc.layers, siblings.map(h => h.path))
+      layers = insertAt(layers, parentPath, minIndex, groupLayer)
+      return { ...sc, layers }
+    }, { label: '成组' })
+    setSelection([groupId])
+    return groupId
+  }, [updateScene])
+
+  const ungroup = useCallback((id: string) => {
+    const s = sceneRef.current
+    const hit = findLayer(s.layers, id)
+    if (!hit || !hit.layer.children?.length) return
+    const g = hit.layer
+    const kids = (g.children ?? []).map(kid => ({
+      ...kid,
+      x: (Number(kid.x) || 0) + (Number(g.x) || 0),
+      y: (Number(kid.y) || 0) + (Number(g.y) || 0)
+    }))
+    updateScene(sc => {
+      let layers = removeAt(sc.layers, hit.path)
+      kids.forEach((kid, i) => {
+        layers = insertAt(layers, hit.parentPath, hit.index + i, kid)
+      })
+      return { ...sc, layers }
+    }, { label: '解组' })
+    setSelection(kids.map(k => k.id))
+  }, [updateScene])
+
+  const reorder = useCallback((id: string, dir: -1 | 1) => {
+    const s = sceneRef.current
+    const hit = findLayer(s.layers, id)
+    if (!hit) return
+    const parent = hit.parentPath.length ? getAt(s.layers, hit.parentPath) : null
+    const list = parent ? (parent.children ?? []) : s.layers
+    const target = hit.index + dir
+    if (target < 0 || target >= list.length) return
+    updateScene(sc => ({ ...sc, layers: moveAt(sc.layers, hit.path, hit.parentPath, target) }), { label: '调整层级' })
+  }, [updateScene])
+
+  const moveTo = useCallback((id: string, parentId: string | null, index: number) => {
+    const s = sceneRef.current
+    const hit = findLayer(s.layers, id)
+    if (!hit) return
+    const parentPath = parentId ? (findLayer(s.layers, parentId)?.path ?? []) : []
+    updateScene(sc => ({ ...sc, layers: moveAt(sc.layers, hit.path, parentPath, index) }), { label: '移动图层' })
   }, [updateScene])
 
   const reorderLayer = useCallback((from: number, to: number) => {
@@ -188,7 +344,7 @@ export function useEditorState(initial: Scene): EditorApi {
     setTimeState(Math.max(0, Math.min(sceneRef.current.canvas.duration, t)))
   }, [])
 
-  // 全局快捷键
+  // 全局快捷键（画布上的方向键/删除由 Stage 自己处理，这里只兜底时间轴操作）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
@@ -199,12 +355,14 @@ export function useEditorState(initial: Scene): EditorApi {
         return
       }
       if (typing) return
+      // 撤销/重做在画布聚焦时也要生效（画布自己处理方向键/删除，别抢）
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault()
         if (e.shiftKey) redo()
         else undo()
         return
       }
+      if (target?.closest?.('[data-canvas]')) return
       // ←/→ 逐帧步进，Home/End 跳首尾（剪映同款）
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault()
@@ -233,14 +391,27 @@ export function useEditorState(initial: Scene): EditorApi {
   }, [redo, save, undo])
 
   return useMemo<EditorApi>(() => ({
-    state: { scene, selectedLayerId, time, playing, dirty, saving, lastSavedAt },
-    select: setSelectedLayerId,
+    state: {
+      scene,
+      selectedLayerId: selection.length ? selection[selection.length - 1] : null,
+      selection,
+      time, playing, dirty, saving, lastSavedAt
+    },
+    select,
+    selectMany,
+    toggleSelect,
     setTime,
     setPlaying,
     updateScene,
     updateLayer,
     addLayer,
     removeLayer,
+    removeLayers,
+    duplicate,
+    group,
+    ungroup,
+    reorder,
+    moveTo,
     reorderLayer,
     undo,
     redo,
@@ -248,15 +419,11 @@ export function useEditorState(initial: Scene): EditorApi {
     canRedo,
     save,
     replaceScene
-  }), [scene, selectedLayerId, time, playing, dirty, saving, lastSavedAt, setTime, updateScene, updateLayer, addLayer, removeLayer, reorderLayer, undo, redo, canUndo, canRedo, save, replaceScene])
+  }), [scene, selection, time, playing, dirty, saving, lastSavedAt, select, selectMany, toggleSelect, setTime, updateScene, updateLayer, addLayer, removeLayer, removeLayers, duplicate, group, ungroup, reorder, moveTo, reorderLayer, undo, redo, canUndo, canRedo, save, replaceScene])
 }
 
 export function newLayerId(scene: Scene): string {
-  let i = scene.layers.length + 1
-  const ids = new Set(scene.layers.map(l => l.id))
-  let id = `layer_${i}`
-  while (ids.has(id)) id = `layer_${++i}`
-  return id
+  return nextLayerId(scene)
 }
 
 export { emptyScene }

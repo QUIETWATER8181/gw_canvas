@@ -23,6 +23,9 @@ _only-*.png
 _selftest.mp4
 _dump.json
 *.log
+_agent.out
+_agent.err
+_shots/
 
 # 系统
 .DS_Store

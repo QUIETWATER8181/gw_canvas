@@ -139,7 +139,7 @@
 .tb-actions { display: flex; align-items: center; gap: 6px; }
 .tb-menu {
   position: absolute; right: 0; top: 34px;
-  min-width: 168px;
+  min-width: 128px;
   padding: 5px;
   background: var(--bg-2);
   border: 1px solid var(--line-strong);
@@ -445,8 +445,10 @@
   position: absolute;
   border: 1px solid var(--accent);
   pointer-events: none;
+  transform-origin: center center;
   box-shadow: 0 0 0 1px rgba(79, 195, 217, 0.15), inset 0 0 0 1px rgba(79, 195, 217, 0.1);
 }
+.sel-box.multi { border-style: dashed; border-color: var(--gold); }
 .sel-tag {
   position: absolute; left: -1px; top: -21px;
   padding: 1px 6px;
@@ -456,12 +458,66 @@
   font-weight: 700;
   border-radius: 3px 3px 0 0;
   white-space: nowrap;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis;
 }
-.sel-box .h { position: absolute; width: 7px; height: 7px; background: var(--bg-0); border: 1px solid var(--accent); }
-.sel-box .h.tl { left: -4px; top: -4px; }
-.sel-box .h.tr { right: -4px; top: -4px; }
-.sel-box .h.bl { left: -4px; bottom: -4px; }
-.sel-box .h.br { right: -4px; bottom: -4px; }
+.sel-box .h {
+  position: absolute; width: 8px; height: 8px;
+  background: var(--bg-0); border: 1px solid var(--accent);
+  pointer-events: auto; border-radius: 1px;
+}
+.sel-box .h.nw { left: -4px; top: -4px; cursor: nwse-resize; }
+.sel-box .h.n  { left: 50%; margin-left: -4px; top: -4px; cursor: ns-resize; }
+.sel-box .h.ne { right: -4px; top: -4px; cursor: nesw-resize; }
+.sel-box .h.e  { right: -4px; top: 50%; margin-top: -4px; cursor: ew-resize; }
+.sel-box .h.se { right: -4px; bottom: -4px; cursor: nwse-resize; }
+.sel-box .h.s  { left: 50%; margin-left: -4px; bottom: -4px; cursor: ns-resize; }
+.sel-box .h.sw { left: -4px; bottom: -4px; cursor: nesw-resize; }
+.sel-box .h.w  { left: -4px; top: 50%; margin-top: -4px; cursor: ew-resize; }
+.sel-box .h.rot {
+  left: 50%; margin-left: -6px; top: -28px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg-0);
+  cursor: grab;
+}
+.sel-box .h.rot::after {
+  content: ''; position: absolute; left: 50%; top: 10px;
+  width: 1px; height: 14px; background: var(--accent);
+}
+
+.snap-line { position: absolute; background: #ff5da2; pointer-events: none; z-index: 4; }
+.snap-line.v { top: 0; bottom: 0; width: 1px; }
+.snap-line.h { left: 0; right: 0; height: 1px; }
+
+.marquee-box {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: rgba(79, 195, 217, 0.1);
+  pointer-events: none;
+}
+.stage-hint {
+  position: absolute; left: 12px; bottom: 10px;
+  padding: 3px 8px;
+  font-size: 10.5px; color: var(--fg-4);
+  background: rgba(8, 12, 16, 0.7);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  pointer-events: none;
+  max-width: calc(100% - 24px);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.text-editor {
+  position: absolute;
+  z-index: 8;
+  margin: 0; padding: 0;
+  background: rgba(8, 12, 16, 0.9);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+  resize: none;
+  font-family: inherit;
+  overflow: hidden;
+  box-shadow: 0 0 0 3px rgba(79, 195, 217, 0.15);
+}
 
 .region-box {
   position: absolute;
@@ -485,7 +541,7 @@
 /* ---------------- 时间轴 ---------------- */
 .timeline {
   flex: none;
-  height: 208px;
+  height: clamp(210px, 30vh, 340px);
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--line);
@@ -526,7 +582,7 @@
 /* 表头行（纵向滚动时吸顶） */
 .tl-head { display: flex; height: 24px; position: sticky; top: 0; z-index: 6; background: var(--bg-2); }
 .tl-corner {
-  width: 128px; flex: none;
+  width: 168px; flex: none;
   position: sticky; left: 0; z-index: 7;
   background: var(--bg-2);
   border-right: 1px solid var(--line-soft);
@@ -551,7 +607,7 @@
 /* 轨道行 */
 .tl-track { display: flex; height: 30px; align-items: stretch; }
 .tl-track-name {
-  width: 128px; flex: none;
+  width: 168px; flex: none;
   position: sticky; left: 0; z-index: 4;
   display: flex; align-items: center; gap: 6px;
   padding: 0 10px;
@@ -587,6 +643,44 @@
 .tl-handle { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
 .tl-handle.l { left: 0; }
 .tl-handle.r { right: 0; }
+
+/* 类型配色：一眼分清画面/音频/字幕/组合 */
+.tl-bar.kind-group { background: linear-gradient(180deg, rgba(242, 181, 68, 0.34), rgba(242, 181, 68, 0.14)); border-color: rgba(242, 181, 68, 0.45); }
+.tl-bar.kind-text { background: linear-gradient(180deg, rgba(160, 140, 255, 0.34), rgba(160, 140, 255, 0.14)); border-color: rgba(160, 140, 255, 0.45); }
+.tl-bar.kind-image { background: linear-gradient(180deg, rgba(110, 200, 140, 0.32), rgba(110, 200, 140, 0.13)); border-color: rgba(110, 200, 140, 0.42); }
+.tl-bar.kind-shape { background: linear-gradient(180deg, rgba(79, 195, 217, 0.32), rgba(79, 195, 217, 0.13)); border-color: rgba(79, 195, 217, 0.42); }
+.tl-bar.kind-code { background: linear-gradient(180deg, rgba(125, 139, 150, 0.3), rgba(125, 139, 150, 0.12)); border-color: rgba(125, 139, 150, 0.4); }
+.tl-bar.kind-audio { background: linear-gradient(180deg, rgba(224, 108, 117, 0.32), rgba(224, 108, 117, 0.13)); border-color: rgba(224, 108, 117, 0.42); }
+.tl-bar.kind-subtitle { background: linear-gradient(180deg, rgba(120, 210, 210, 0.28), rgba(120, 210, 210, 0.1)); border-color: rgba(120, 210, 210, 0.4); }
+.tl-bar.kind-audio .tl-bar-label, .tl-bar.kind-subtitle .tl-bar-label { color: #ffe0e2; }
+.tl-track.other .tl-track-name { color: var(--fg-4); }
+.tl-track.off .tl-name-text { opacity: 0.45; text-decoration: line-through; }
+
+.tl-chev {
+  flex: none; width: 14px; height: 14px;
+  display: grid; place-items: center;
+  border: none; background: transparent; color: var(--fg-3);
+  cursor: pointer; padding: 0; border-radius: 3px;
+}
+.tl-chev:hover { background: var(--bg-4); color: var(--fg); }
+.tl-chev.closed svg { transform: rotate(-90deg); }
+.tl-chev-space { width: 14px; flex: none; }
+.tl-name-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tl-row-tools { display: none; gap: 2px; flex: none; }
+.tl-track:hover .tl-row-tools { display: flex; }
+.tl-mini {
+  width: 16px; height: 16px; display: grid; place-items: center;
+  border: none; background: transparent; color: var(--fg-4); cursor: pointer; padding: 0; border-radius: 3px;
+}
+.tl-mini:hover { background: var(--bg-4); color: var(--fg); }
+.tl-mini.on { color: var(--gold); }
+.tl-mini.off { color: var(--fg-5, #4a5560); }
+.tl-lane.drop-target { background: rgba(79, 195, 217, 0.09); box-shadow: inset 0 0 0 1px rgba(79, 195, 217, 0.35); }
+.tl-drop-line {
+  position: absolute; top: 24px; bottom: 0; width: 2px; margin-left: -1px;
+  background: var(--accent); pointer-events: none; z-index: 5;
+  box-shadow: 0 0 8px rgba(79, 195, 217, 0.8);
+}
 
 /* 播放头竖线：绝对定位在 tracks 上，横跨表头与全部轨道；横向滚到名栏下时被名栏(不透明)盖住 */
 .tl-playhead-line {
@@ -1077,3 +1171,88 @@
   display: inline-block;
   flex: none;
 }
+
+/* ---------------- 右键菜单 ---------------- */
+.ctx-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 186px;
+  padding: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+}
+.ctx-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  width: 100%; padding: 6px 9px;
+  border: none; border-radius: 5px;
+  background: transparent; color: var(--fg-2);
+  font-size: 12px; text-align: left; cursor: pointer;
+}
+.ctx-item:hover:not(:disabled) { background: var(--bg-4); color: var(--fg); }
+.ctx-item:disabled { opacity: 0.38; cursor: default; }
+.ctx-item.danger { color: #f0a1a7; }
+.ctx-item.danger:hover:not(:disabled) { background: rgba(224, 108, 117, 0.14); }
+.ctx-item kbd {
+  font-family: var(--font-mono); font-size: 10px; color: var(--fg-4);
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+}
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--line-soft); }
+
+/* ---------------- 元素类型徽标 ---------------- */
+.kind-pill {
+  flex: none;
+  padding: 1px 6px;
+  font-size: 9.5px; line-height: 14px;
+  border-radius: 3px;
+  color: var(--fg-3);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.tiny-pill { padding: 0 4px; font-size: 9px; line-height: 12px; margin-right: 5px; }
+
+/* ---------------- 属性面板分区 ---------------- */
+.insp-section { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.insp-section-title { font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; color: var(--fg-4); text-transform: uppercase; }
+.color-row { display: flex; align-items: center; gap: 6px; }
+.color-row input[type="color"] {
+  width: 26px; height: 26px; flex: none; padding: 0;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--bg-2); cursor: pointer;
+}
+.color-row .input { flex: 1; min-width: 0; }
+.insp-inline { display: flex; align-items: center; gap: 6px; }
+.insp-inline .input { flex: 1; min-width: 0; }
+.group-list { display: flex; flex-direction: column; gap: 3px; max-height: 160px; overflow-y: auto; }
+.group-item {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 6px; border-radius: 4px;
+  border: 1px solid var(--line-soft); background: var(--bg-2);
+  color: var(--fg-2); font-size: 11.5px; text-align: left; cursor: pointer;
+}
+.group-item:hover { background: var(--bg-3); border-color: var(--line-strong); }
+.group-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------- 左侧手动添加 ---------------- */
+.add-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.lp-tip { margin-top: 8px; font-size: 10.5px; line-height: 1.55; color: var(--fg-4); }
+.zoom-val { min-width: 38px; text-align: center; font-size: 10.5px; color: var(--fg-3); }
+
+/* ---------------- 图层树 ---------------- */
+.ll-chev {
+  flex: none; width: 14px; height: 14px; display: grid; place-items: center;
+  border: none; background: transparent; color: var(--fg-3); cursor: pointer; padding: 0; border-radius: 3px;
+}
+.ll-chev:hover { background: var(--bg-4); color: var(--fg); }
+.ll-chev.closed svg { transform: rotate(-90deg); }
+.ll-chev-space { width: 14px; flex: none; }
+.insp-split {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 9px 10px;
+  border: 1px dashed rgba(242, 181, 68, 0.35);
+  border-radius: var(--radius-m);
+  background: rgba(242, 181, 68, 0.05);
+}
+.insp-split-title { font-size: 11.5px; font-weight: 700; color: var(--gold); }
+.insp-split .btn { align-self: flex-start; }

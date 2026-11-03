@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "meta": {
+    "title": "手工剪辑探针",
+    "brief": "typed 元素、组合、音频、字幕各一条，用来验证画布与时间轴的手工编辑",
+    "style": "深色背景、青蓝主色、金色强调"
+  },
+  "canvas": { "width": 1920, "height": 1080, "fps": 30, "duration": 8 },
+  "theme": {
+    "bg": "#0d1117",
+    "fg": "#e8eef2",
+    "muted": "#7d8b96",
+    "accent": "#4fc3d9",
+    "accent2": "#f2b544",
+    "accent3": "#e06c75",
+    "grid": "#1b2632"
+  },
+  "layers": [
+    {
+      "id": "bg-grid",
+      "name": "背景网格",
+      "kind": "code",
+      "start": 0,
+      "end": 8,
+      "draw": "g.grid(80, theme.grid)"
+    },
+    {
+      "id": "grp-card",
+      "name": "卡片组合",
+      "kind": "group",
+      "x": 240,
+      "y": 180,
+      "w": 640,
+      "h": 360,
+      "start": 0,
+      "end": 8,
+      "children": [
+        {
+          "id": "card-bg",
+          "name": "卡片底",
+          "kind": "shape",
+          "x": 0,
+          "y": 0,
+          "w": 640,
+          "h": 360,
+          "shape": { "type": "rect", "fill": "#16202b", "stroke": "#4fc3d9", "strokeWidth": 2, "radius": 16 }
+        },
+        {
+          "id": "card-title",
+          "name": "卡片标题",
+          "kind": "text",
+          "x": 40,
+          "y": 40,
+          "w": 560,
+          "h": 80,
+          "text": { "content": "组合里的标题", "size": 48, "color": "#e8eef2", "align": "left", "weight": 700 }
+        }
+      ]
+    },
+    {
+      "id": "free-title",
+      "name": "独立标题",
+      "kind": "text",
+      "x": 560,
+      "y": 720,
+      "w": 800,
+      "h": 100,
+      "start": 0,
+      "end": 8,
+      "text": { "content": "独立文字元素", "size": 56, "color": "#f2b544", "align": "center", "weight": 700 }
+    },
+    {
+      "id": "arrow-1",
+      "name": "箭头",
+      "kind": "shape",
+      "x": 300,
+      "y": 820,
+      "w": 300,
+      "h": 120,
+      "start": 0,
+      "end": 8,
+      "shape": { "type": "arrow", "stroke": "#4fc3d9", "strokeWidth": 6 }
+    }
+  ],
+  "audio": [
+    { "id": "vo-1", "name": "旁白1", "src": "assets/vo-agent.wav", "start": 0, "volume": 1, "dur": 3.2 }
+  ],
+  "subtitles": [
+    { "id": "s1", "start": 0.5, "end": 3.2, "text": "第一句字幕" },
+    { "id": "s2", "start": 4, "end": 6, "text": "第二句字幕" }
+  ]
+}

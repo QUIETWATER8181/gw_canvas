@@ -55,42 +55,48 @@ const tools = [
   },
   {
     name: 'scene_inspect',
-    description: '只读取场景摘要：标题、画布、时长、图层清单（id/名称/时间区间），不含绘制代码。开销小，适合每轮开始确认状态。',
+    description: '只读取场景摘要：标题、画布、时长、元素树（id/类型/名称/时间区间/位置/文字预览，组合内缩进），不含绘制代码。开销小，适合每轮开始确认状态。',
     parameters: {}
   },
   {
     name: 'scene_write',
-    description: '用完整的新场景对象覆盖 scene.json。适合大改；小改用 scene_set_layer。返回写入后的图层数与时长。',
+    description: '用完整的新场景对象覆盖 scene.json。适合大改；小改用 scene_set_layer。返回写入后的元素数与时长。注意：新场景请把每个有语义的对象写成独立元素（kind:text/image/shape），相关的放进 kind:"group" 的 children，方便用户手动拖动/改字。',
     parameters: {
-      scene: { type: 'object', additionalProperties: true, required: true, description: '完整的 Scene 对象，结构见 AGENTS.md' }
+      scene: { type: 'object', additionalProperties: true, required: true, description: '完整的 Scene 对象，结构见 AGENTS.md（layers 支持 children 嵌套）' }
     }
   },
   {
     name: 'scene_set_layer',
-    description: '修改单个图层：只传要改的字段。也支持通过 canvas 字段顺带改画布尺寸/时长。',
+    description: '修改单个元素：只传要改的字段。id 在任意嵌套深度都能定位（组合里的子元素也能直接改）。也支持通过 canvas 字段顺带改画布时长。',
     parameters: {
       id: { type: 'string', required: true },
       patch: {
         type: 'object', additionalProperties: true, required: true,
-        description: '可含 name/draw/x/y/opacity/blend/visible/start/end/bounds/note'
+        description: '可含 name/draw/x/y/w/h/scale/rotation/opacity/blend/visible/start/end/bounds/note/kind/text/image/shape/children'
       },
       canvas: { type: 'object', additionalProperties: true, description: '可选，画布字段 width/height/fps/duration/background' }
     }
   },
   {
     name: 'scene_add_layer',
-    description: '新增一个图层。id 省略时自动生成。draw 为绘制代码。',
+    description: '新增一个元素。id 省略时自动生成。要么给 draw（绘制代码），要么给 kind=text/image/shape/group 加对应属性。给了 parent 就加进那个组合的 children。',
     parameters: {
       layer: {
         type: 'object', additionalProperties: true, required: true,
-        description: '{ id?, name, draw, x?, y?, opacity?, start?, end?, note? }'
-      }
+        description: '{ id?, name, kind?, draw?, x?, y?, w?, h?, rotation?, opacity?, start?, end?, note?, text?, image?, shape?, children? }'
+      },
+      parent: { type: 'string', description: '可选，父组合的 id；省略则加到顶层' }
     }
   },
   {
     name: 'scene_delete_layer',
-    description: '删除一个图层。',
+    description: '删除一个元素（组合里的子元素也可以直接删）。',
     parameters: { id: { type: 'string', required: true } }
+  },
+  {
+    name: 'scene_restructure',
+    description: '把「一整段画死的代码」重组成「组合 + 可单独编辑的元素」时，先调用它拿到拆分要求。它不会改场景，只返回一份可执行的拆分指引（含目标图层信息），然后你按指引用 scene_write 写入新结构。用户点「让 AI 拆成组合」时也会走这条路。',
+    parameters: { id: { type: 'string', description: '要拆的图层 id；省略表示整个场景' } }
   },
   {
     name: 'scene_render_frame',

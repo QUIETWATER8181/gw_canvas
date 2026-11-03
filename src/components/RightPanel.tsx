@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AgentStatus, ChatMessage } from '../shared/ipc'
 import { useEditor } from '../state/editor'
+import { countLayers, findLayer } from '../shared/layers'
 import { LayerList } from './LayerList'
 import { Inspector } from './Inspector'
 import { ChatPanel } from './ChatPanel'
@@ -48,7 +49,8 @@ export function RightPanel({ chat, agent, onOpenSettings, onToast }: Props) {
     }
   }
 
-  const selected = editor.state.scene.layers.find(l => l.id === editor.state.selectedLayerId) ?? null
+  const selected = editor.state.selectedLayerId ? findLayer(editor.state.scene.layers, editor.state.selectedLayerId)?.layer ?? null : null
+  const layerCount = countLayers(editor.state.scene.layers)
 
   return (
     <aside className="right-panel">
@@ -58,7 +60,7 @@ export function RightPanel({ chat, agent, onOpenSettings, onToast }: Props) {
           {busy && <span className="spin-dot" />}
         </button>
         <button className={tab === 'layers' ? 'on' : ''} onClick={() => setTab('layers')}>
-          图层 <span className="rp-count">{editor.state.scene.layers.length}</span>
+          图层 <span className="rp-count">{layerCount}</span>
         </button>
       </div>
 

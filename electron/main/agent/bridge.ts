@@ -7,7 +7,9 @@ import { ToolGateway } from './tool-gateway'
 import { synthesize } from '../tts'
 import { describeImage } from '../vision'
 import type { AgentStatus, ChatMessage, ScenePatch, ToolInvocation, ToolResult } from '@shared/ipc'
-import type { Scene } from '@shared/scene'
+import type { Scene, SceneLayer } from '@shared/scene'
+import { KIND_LABEL, layerKind } from '@shared/scene'
+import { collectIds, findLayer, insertAt, removeAt, updateAt } from '@shared/layers'
 
 /**
  * ACP 把上游模型的报错层层包了一层壳（「DSH session/prompt 失败：Internal error: turn failed: …」），
@@ -22,8 +24,18 @@ function humanizeAgentError(detail: string): string {
   return cleaned || detail
 }
 
-export interface BridgeOptions {
-  runtimeRoot: string
+/** 一层到底有没有「能画出来」的内容：typed 元素不需要 draw */
+function hasAnyContent(layer: SceneLayer): boolean {
+  if ((layer.draw ?? '').trim()) return true
+  const kind = layerKind(layer)
+  if (kind === 'group') return Boolean(layer.children?.length)
+  if (kind === 'text') return Boolean(layer.text?.content?.trim())
+  if (kind === 'image') return Boolean(layer.image?.src)
+  if (kind === 'shape') return Boolean(layer.shape)
+  return false
+}
+
+export interface BridgeOptions {  runtimeRoot: string
   dataRoot: string
   pluginSource: string
   getConnection(): { id: string; name: string; kind: string; baseUrl: string; model: string; apiKey: string } | null
@@ -255,20 +267,35 @@ export class AgentBridge {
     } catch {
       return '<scene-state>场景文件暂不可读</scene-state>'
     }
-    const layerLines = scene.layers.map((l, i) => {
-      const range = `${l.start ?? 0}–${l.end ?? scene.canvas.duration}s`
-      const bounds = l.bounds ? ` bounds=${JSON.stringify(l.bounds)}` : ''
-      const note = l.note ? ` note=${JSON.stringify(l.note)}` : ''
-      const picked = ui?.selectedLayerId && ui.selectedLayerId === l.id ? '  ← 用户当前选中' : ''
-      return `  ${i + 1}. id=${l.id} name=${JSON.stringify(l.name)} time=${range}${bounds}${note}${picked}`
-    })
+    const layerLines: string[] = []
+    const walk = (layers: SceneLayer[], depth: number) => {
+      layers.forEach((l, i) => {
+        const range = `${l.start ?? 0}–${l.end ?? scene.canvas.duration}s`
+        const bounds = l.bounds ? ` bounds=${JSON.stringify(l.bounds)}` : ''
+        const note = l.note ? ` note=${JSON.stringify(l.note)}` : ''
+        const box = l.w !== undefined || l.h !== undefined
+          ? ` box=(${Math.round(l.x ?? 0)},${Math.round(l.y ?? 0)},${Math.round(l.w ?? 0)},${Math.round(l.h ?? 0)})`
+          : ''
+        const picked = ui?.selectedLayerId && ui.selectedLayerId === l.id ? '  ← 用户当前选中' : ''
+        const preview = l.text ? ` text=${JSON.stringify(l.text.content.slice(0, 40))}` : ''
+        const src = l.image ? ` src=${JSON.stringify(l.image.src)}` : ''
+        const shape = l.shape ? ` shape=${l.shape.type}` : ''
+        const pad = '  '.repeat(depth + 1)
+        const marker = depth === 0 ? `${i + 1}. ` : '- '
+        layerLines.push(
+          `${pad}${marker}[${KIND_LABEL[layerKind(l)]}] id=${l.id} name=${JSON.stringify(l.name)} time=${range}${box}${shape}${src}${preview}${bounds}${note}${picked}`
+        )
+        if (l.children?.length) walk(l.children, depth + 1)
+      })
+    }
+    walk(scene.layers, 0)
     const uiLines: string[] = []
     if (ui?.time !== undefined && Number.isFinite(ui.time)) {
       uiLines.push(`用户播放头停在 t=${ui.time.toFixed(2)}s（说「这里/这一帧/现在」指的就是这个时刻）`)
     }
     if (ui?.selectedLayerId) {
-      const picked = scene.layers.find(l => l.id === ui.selectedLayerId)
-      uiLines.push(`用户选中的图层：${ui.selectedLayerId}${picked ? `（${picked.name}）` : ''}`)
+      const picked = findLayer(scene.layers, ui.selectedLayerId)
+      uiLines.push(`用户选中的图层：${ui.selectedLayerId}${picked ? `（${picked.layer.name}，路径 ${picked.path.join(' > ')}）` : ''}`)
     }
     if (ui?.region) {
       const r = ui.region
@@ -280,11 +307,13 @@ export class AgentBridge {
       `文件：scene.json（工作区根目录）`,
       `标题：${scene.meta.title}${scene.meta.brief ? `｜主题：${scene.meta.brief}` : ''}`,
       `画布：${scene.canvas.width}×${scene.canvas.height} @ ${scene.canvas.fps}fps，时长 ${scene.canvas.duration}s`,
-      `图层（${scene.layers.length}）：`,
+      `图层（顶层 ${scene.layers.length} 个，共 ${collectIds(scene.layers).length} 个元素；组合内缩进列出）：`,
       layerLines.length ? layerLines.join('\n') : '  （空）',
       `音频：${scene.audio.length} 条｜字幕：${scene.subtitles.length} 条`,
       ...uiLines,
       '改动请用 scene_set_layer / scene_write 工具，不要直接编辑文件。',
+      '元素可以嵌套在组合（kind:"group"）里；scene_set_layer 的 id 在任意深度都能定位。',
+      '用户能手动拖动/缩放/旋转元素、双击改文字，所以你只需要给出结构化、语义清楚的元素，不要把所有东西画死在一段代码里。',
       '</scene-state>'
     ].join('\n')
   }
@@ -375,12 +404,12 @@ export class AgentBridge {
       if (normalized.layers.length === 0) {
         throw new Error(
           'layers 为空，已拒绝写入，当前场景保持不变。' +
-          'scene_write 必须带一个非空的 layers 数组，每层至少要有 id 和 draw（函数体字符串）。' +
+          'scene_write 必须带一个非空的 layers 数组，每层至少要有 id，并且有内容（draw 函数体，或 kind:text/image/shape/group + 对应属性）。' +
           (warnings.length ? `\n检查结果：\n${warnings.map(w => `- ${w}`).join('\n')}` : '')
         )
       }
-      if (normalized.layers.every(l => !l.draw.trim())) {
-        throw new Error('所有图层的 draw 都是空的，已拒绝写入。至少给一层写绘制代码。')
+      if (normalized.layers.every(l => !hasAnyContent(l))) {
+        throw new Error('所有图层都没有内容（draw 为空、也不是 text/image/shape/group），已拒绝写入。')
       }
       await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
@@ -392,58 +421,80 @@ export class AgentBridge {
       if (!id) throw new Error('缺少图层 id')
       const { normalizeScene, writeSceneFile } = await import('../scene-store')
       const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
-      const layer = scene.layers.find(l => l.id === id)
-      if (!layer) throw new Error(`图层 ${id} 不存在；现有：${scene.layers.map(l => l.id).join(', ')}`)
+      const hit = findLayer(scene.layers, id)
+      if (!hit) throw new Error(`图层 ${id} 不存在；现有：${collectIds(scene.layers).join(', ')}`)
       const patch = (args.patch ?? {}) as Record<string, unknown>
-      for (const key of ['name', 'draw', 'x', 'y', 'opacity', 'blend', 'visible', 'locked', 'note', 'bounds'] as const) {
-        if (patch[key] !== undefined) (layer as unknown as Record<string, unknown>)[key] = patch[key]
+      const merged: SceneLayer = { ...hit.layer }
+      for (const key of ['name', 'draw', 'x', 'y', 'w', 'h', 'scale', 'rotation', 'opacity', 'blend', 'visible', 'locked', 'note', 'bounds', 'kind', 'text', 'image', 'shape', 'children'] as const) {
+        if (patch[key] !== undefined) (merged as unknown as Record<string, unknown>)[key] = patch[key]
       }
-      if (patch.start !== undefined) layer.start = Number(patch.start)
-      if (patch.end !== undefined) layer.end = Number(patch.end)
+      if (patch.start !== undefined) merged.start = Number(patch.start)
+      if (patch.end !== undefined) merged.end = Number(patch.end)
       if (args.canvas && typeof args.canvas === 'object') Object.assign(scene.canvas, args.canvas)
-      const normalized = normalizeScene(scene)
+      const normalized = normalizeScene({ ...scene, layers: updateAt(scene.layers, hit.path, merged) })
       await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
-      return { ok: true, layer: id }
+      return { ok: true, layer: id, path: hit.path.join(' > '), count: collectIds(normalized.layers).length }
     })
 
     wrap('scene_add_layer', async (args) => {
       const { normalizeScene, auditSceneInput, writeSceneFile } = await import('../scene-store')
       const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
-      const layer = args.layer as Record<string, unknown>
-      if (!layer || typeof layer.draw !== 'string') throw new Error('layer.draw 必须是字符串')
-      const id = String(layer.id ?? `layer_${scene.layers.length + 1}`)
-      if (scene.layers.some(l => l.id === id)) throw new Error(`图层 id ${id} 已存在；现有：${scene.layers.map(l => l.id).join(', ')}`)
-      scene.layers.push({
-        id,
-        name: String(layer.name ?? id),
-        draw: layer.draw,
-        x: Number(layer.x) || 0,
-        y: Number(layer.y) || 0,
-        opacity: layer.opacity === undefined ? 1 : Number(layer.opacity),
-        start: layer.start === undefined ? undefined : Number(layer.start),
-        end: layer.end === undefined ? undefined : Number(layer.end),
-        visible: layer.visible !== false,
-        note: layer.note ? String(layer.note) : undefined
-      })
-      const warnings = auditSceneInput({ layers: [layer] })
-      const normalized = normalizeScene(scene)
+      const layer = args.layer as Record<string, unknown> | undefined
+      if (!layer || typeof layer !== 'object') throw new Error('缺少 layer 对象')
+      const kind = typeof layer.kind === 'string' ? layer.kind : undefined
+      const hasContent = typeof layer.draw === 'string' || (kind && ['text', 'image', 'shape', 'group'].includes(kind))
+      if (!hasContent) throw new Error('layer 需要 draw 字符串，或 kind=text/image/shape/group 加对应属性')
+      const id = String(layer.id ?? `layer_${collectIds(scene.layers).length + 1}`)
+      if (collectIds(scene.layers).includes(id)) throw new Error(`图层 id ${id} 已存在；现有：${collectIds(scene.layers).join(', ')}`)
+      const raw = { ...layer, id }
+      const parentId = args.parent ? String(args.parent) : null
+      let layers: SceneLayer[]
+      if (parentId) {
+        const parent = findLayer(scene.layers, parentId)
+        if (!parent) throw new Error(`父级 ${parentId} 不存在`)
+        layers = updateAt(scene.layers, parent.path, { children: [...(parent.layer.children ?? []), raw as unknown as SceneLayer] })
+      } else {
+        layers = [...scene.layers, raw as unknown as SceneLayer]
+      }
+      const warnings = auditSceneInput({ layers: [raw] })
+      const normalized = normalizeScene({ ...scene, layers })
       await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
-      return { ok: true, id, count: normalized.layers.length, warnings }
+      return { ok: true, id, parent: parentId, count: collectIds(normalized.layers).length, warnings }
     })
 
     wrap('scene_delete_layer', async (args) => {
       const id = String(args.id ?? '')
       const { normalizeScene, writeSceneFile } = await import('../scene-store')
       const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
-      const before = scene.layers.length
-      scene.layers = scene.layers.filter(l => l.id !== id)
-      if (scene.layers.length === before) throw new Error(`图层 ${id} 不存在`)
-      const normalized = normalizeScene(scene)
+      const hit = findLayer(scene.layers, id)
+      if (!hit) throw new Error(`图层 ${id} 不存在`)
+      const normalized = normalizeScene({ ...scene, layers: removeAt(scene.layers, hit.path) })
       await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
-      return { ok: true, count: normalized.layers.length }
+      return { ok: true, count: collectIds(normalized.layers).length }
+    })
+
+    // 把「一整段画死的代码」重组成「组合 + 可单独编辑的元素」。
+    // 真正动手拆的是模型自己：这里只负责把它引导到正确的结构上，并给出可校验的结果。
+    wrap('scene_restructure', async (args) => {
+      const { normalizeScene } = await import('../scene-store')
+      const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
+      const targetId = args.id ? String(args.id) : null
+      const target = targetId ? findLayer(scene.layers, targetId) : null
+      if (targetId && !target) throw new Error(`图层 ${targetId} 不存在；现有：${collectIds(scene.layers).join(', ')}`)
+      return [
+        '请按下面的要求把场景重组成可编辑的结构，然后用 scene_write 一次性写入（不要只改一层）：',
+        '1. 每个有语义的对象（标题、轴、箭头、圆、标签……）单独成一个元素，不要把所有绘制塞进一段 draw。',
+        '2. 能写成 typed 元素就不要写代码：文字用 kind:"text"+text{}；图片用 kind:"image"+image{}；矩形/圆/线/箭头用 kind:"shape"+shape{}。',
+        '3. 同一组语义相关的元素放进 kind:"group" 的 children，并给组合起人类能懂的名字（如「标题组」「受力分析图」）。',
+        '4. 元素坐标用画布绝对设计坐标（1920×1080），x/y/w/h 必填；需要旋转时用 rotation（度）。',
+        '5. 动画（随时间变化的部分）才用 draw 代码，并让它只负责动画，不要重复画静态内容。',
+        target ? `目标图层：${target.layer.id}（${target.layer.name}，路径 ${target.path.join(' > ')}）` : '目标：整个场景',
+        `当前场景结构（scene_inspect 可看到完整信息）：${collectIds(scene.layers).length} 个元素，顶层 ${scene.layers.length} 个。`,
+        '写完后调用 scene_render_frame 在 2–3 个时间点自检，确认画面和原来一致或更好。'
+      ].join('\n')
     })
 
     wrap('scene_render_frame', async (args) => {
