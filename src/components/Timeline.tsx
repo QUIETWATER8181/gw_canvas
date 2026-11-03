@@ -404,6 +404,8 @@ export function Timeline() {
       for (const el of Array.from(document.querySelectorAll<HTMLElement>('.tl-track'))) {
         const id = el.dataset.id
         if (!id || el.dataset.kind !== 'layer') continue
+        // 锁定的图层不参与框选（拖也拖不动，选上只会让人困惑）
+        if (el.querySelector('.tl-mini[title="解锁"]')) continue
         const r = el.getBoundingClientRect()
         if (r.left < box.x2 && r.right > box.x1 && r.top < box.y2 && r.bottom > box.y1) ids.push(id)
       }

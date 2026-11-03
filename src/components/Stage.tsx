@@ -75,7 +75,7 @@ export function Stage({ onToast, exportJob }: Props) {
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [snapGuides, setSnapGuides] = useState<{ v: number[]; h: number[] }>({ v: [], h: [] })
   /** 正在拖的参考线；index=-1 表示从标尺新建 */
-  const [guideDraft, setGuideDraft] = useState<{ axis: 'v' | 'h'; index: number; value: number } | null>(null)
+  const [guideDraft, setGuideDraft] = useState<{ axis: 'v' | 'h'; index: number; value: number; moved: boolean } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; id: string | null; at?: { x: number; y: number } } | null>(null)
   const [textEdit, setTextEdit] = useState<{ id: string; path: string[] } | null>(null)
   const [spaceDown, setSpaceDown] = useState(false)
@@ -468,16 +468,19 @@ export function Stage({ onToast, exportJob }: Props) {
     e.preventDefault()
     const p = toDesignClamped(e)
     if (!p) return
-    setGuideDraft({ axis, index, value: round2(axis === 'v' ? p.x : p.y) })
+    setGuideDraft({ axis, index, value: round2(axis === 'v' ? p.x : p.y), moved: false })
   }
 
   const commitGuide = useCallback((axis: 'v' | 'h', index: number, value: number) => {
     const key = axis === 'v' ? 'v' : 'h'
+    // 参考线限制在画布范围内，别飘到看不见的地方
+    const max = axis === 'v' ? scene.canvas.width : scene.canvas.height
+    const v = round2(clamp(value, 0, max))
     const list = [...(userGuides[key] ?? [])]
-    if (index >= 0 && index < list.length) list[index] = value
-    else list.push(value)
+    if (index >= 0 && index < list.length) list[index] = v
+    else list.push(v)
     editor.setGuides({ ...userGuides, [key]: list })
-  }, [editor, userGuides])
+  }, [editor, scene.canvas.height, scene.canvas.width, userGuides])
 
   const removeGuide = useCallback((axis: 'v' | 'h', index: number) => {
     const key = axis === 'v' ? 'v' : 'h'
@@ -491,10 +494,11 @@ export function Stage({ onToast, exportJob }: Props) {
     const move = (e: PointerEvent) => {
       const p = toDesignClamped(e)
       if (!p) return
-      setGuideDraft(d => (d ? { ...d, value: round2(d.axis === 'v' ? p.x : p.y) } : d))
+      setGuideDraft(d => (d ? { ...d, value: round2(d.axis === 'v' ? p.x : p.y), moved: true } : d))
     }
     const up = () => {
-      commitGuide(guideDraft.axis, guideDraft.index, guideDraft.value)
+      // 从标尺上「点一下」不建参考线，得真的拖出来
+      if (guideDraft.index >= 0 || guideDraft.moved) commitGuide(guideDraft.axis, guideDraft.index, guideDraft.value)
       setGuideDraft(null)
     }
     window.addEventListener('pointermove', move)

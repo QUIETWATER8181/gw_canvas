@@ -75,6 +75,10 @@
     const p = n => ('0' + n).slice(-2)
     return `${p(Math.floor(t / 60))}:${p(Math.floor(t % 60))}:${p(Math.floor((t * fps) % fps))}`
   }
+  const parseTC = (tc) => {
+    const m = /^(\d+):(\d+):(\d+)$/.exec((tc || '').trim())
+    return m ? Number(m[1]) * 60 + Number(m[2]) + Number(m[3]) / 30 : NaN
+  }
   const out = {}
   try {
     await wait(2600)
@@ -186,6 +190,21 @@
     const s7 = await readScene()
     out.arrowEnd = byId(s7, 'arrow-1')?.end
     check('箭头裁短到 4s 左右（为框选腾出空白）', Math.abs((byId(s7, 'arrow-1')?.end ?? 0) - 4) < 0.3, byId(s7, 'arrow-1')?.end)
+
+    // 空白轨道区单击 = 移动播放头（不能误触发框选）
+    const emptyLane = laneOf('arrow-1')
+    if (emptyLane) {
+      const lr = rectOf(emptyLane)
+      const cx = lr.left + 6 * pps
+      const cy = lr.top + lr.h / 2
+      emptyLane.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0, buttons: 1 }))
+      await wait(150)
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: cx, clientY: cy }))
+      await wait(300)
+      const tc = q('.tl-time-cur')?.textContent ?? ''
+      const secs = parseTC(tc)
+      check('空白轨道区单击 = 移动播放头（不误选框选）', Math.abs(secs - 6) < 0.1 && qa('.tl-marquee').length === 0, { tc, secs })
+    }
 
     const arrowLane = laneOf('arrow-1')
     const titleLane = laneOf('free-title')
