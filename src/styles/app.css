@@ -149,6 +149,7 @@
 }
 .tb-menu button { display: block; width: 100%; text-align: left; padding: 7px 9px; border-radius: 6px; font-size: 12px; color: var(--fg-2); }
 .tb-menu button:hover { background: var(--bg-3); color: var(--fg); }
+.tb-menu-sep { height: 1px; margin: 5px 4px; background: var(--line); }
 
 /* ---------------- 工作区三栏 ---------------- */
 .workspace {
@@ -1346,3 +1347,48 @@
 }
 .insp-split-title { font-size: 11.5px; font-weight: 700; color: var(--gold); }
 .insp-split .btn { align-self: flex-start; }
+
+/* ---------------- 使用说明弹窗 ---------------- */
+.modal.hdlg { width: min(760px, calc(100vw - 60px)); max-height: calc(100vh - 70px); }
+.help-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 6px 18px 14px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.help-body h3 {
+  margin: 14px 0 6px; font-size: 12px; font-weight: 700; color: var(--fg);
+  letter-spacing: 0.02em;
+}
+.help-body h3:first-child { margin-top: 6px; }
+.help-p { margin: 0 0 6px; font-size: 12px; line-height: 1.75; color: var(--fg-2); }
+.help-p b, .help-row-v b { color: var(--fg); font-weight: 600; }
+.help-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.help-steps li { font-size: 12px; line-height: 1.7; color: var(--fg-2); }
+.help-steps li b { color: var(--fg); }
+.help-row {
+  display: grid; grid-template-columns: 168px 1fr; gap: 10px;
+  padding: 5px 8px; border-radius: 6px;
+  font-size: 12px; line-height: 1.65; color: var(--fg-2);
+}
+.help-row:nth-of-type(even) { background: rgba(255, 255, 255, 0.018); }
+.help-row-k { color: var(--fg-3); font-size: 11.5px; }
+.help-row-v { min-width: 0; }
+.help-body kbd {
+  display: inline-block; padding: 1px 5px; margin: 0 1px;
+  border: 1px solid var(--line-strong); border-bottom-width: 2px;
+  border-radius: 4px; background: var(--bg-2);
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 15px;
+  color: var(--fg);
+}
+.help-tip {
+  margin-top: 12px; padding: 9px 11px;
+  border: 1px solid var(--accent-line); border-radius: var(--radius-m);
+  background: rgba(79, 195, 217, 0.06);
+  font-size: 11.5px; line-height: 1.7; color: var(--fg-2);
+}
+.help-clip { color: var(--gold); font-weight: 700; }
+.help-foot {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; border-top: 1px solid var(--line); background: var(--bg-1);
+}
+.help-foot .tiny { max-width: 460px; line-height: 1.6; }

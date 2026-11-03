@@ -11,6 +11,7 @@ import { ToolHost } from './components/ToolHost'
 import { SettingsModal } from './components/SettingsModal'
 import { ExportToast } from './components/ExportToast'
 import { ExportDialog, type ExportStartInput } from './components/ExportDialog'
+import { HelpDialog } from './components/HelpDialog'
 import './styles/app.css'
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
   const [drafts, setDrafts] = useState<DraftSummary[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [switching, setSwitching] = useState(false)
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'err' | 'info' } | null>(null)
   const [exportJob, setExportJob] = useState<{ running: boolean; frame: number; total: number; phase: string } | null>(null)
@@ -262,12 +264,12 @@ export default function App() {
           onOpenDraft={id => void switchDraft(id)}
           onNewDraft={() => void newDraft()}
           onNewSession={() => { setChat([]); void window.gewu.newSession() }}
-          onToast={setToast}
+          onOpenHelp={() => setHelpOpen(true)}
         />
         <div className="workspace">
           <LeftPanel onToast={setToast} />
           <Stage onToast={setToast} exportJob={exportJob} />
-          <RightPanel chat={chat} agent={appState.agent} onOpenSettings={() => setSettingsOpen(true)} onToast={setToast} />
+          <RightPanel chat={chat} agent={appState.agent} onOpenSettings={() => setSettingsOpen(true)} onOpenHelp={() => setHelpOpen(true)} onToast={setToast} />
         </div>
         <ToolHost
           onExport={async args => {
@@ -301,6 +303,7 @@ export default function App() {
           onClose={() => setExportOpen(false)}
           onStart={input => void startExport(input)}
         />
+        <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
         {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
         {exportJob?.running && <ExportToast job={exportJob} />}
       </div>

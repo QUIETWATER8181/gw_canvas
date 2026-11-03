@@ -10,12 +10,13 @@ interface Props {
   chat: ChatMessage[]
   agent: AgentStatus
   onOpenSettings(): void
+  onOpenHelp(): void
   onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
 }
 
 type Tab = 'layers' | 'chat'
 
-export function RightPanel({ chat, agent, onOpenSettings, onToast }: Props) {
+export function RightPanel({ chat, agent, onOpenSettings, onOpenHelp, onToast }: Props) {
   const editor = useEditor()
   const [tab, setTab] = useState<Tab>('chat')
   const [draft, setDraft] = useState('')
@@ -112,7 +113,7 @@ export function RightPanel({ chat, agent, onOpenSettings, onToast }: Props) {
         </div>
         <div className="rp-composer-foot">
           <span className="tiny muted">Enter 发送 · Shift+Enter 换行</span>
-          <span className="tiny muted">agent 会直接改场景代码</span>
+          <button className="link tiny" onClick={onOpenHelp} title="手工剪辑怎么用（含「组合」说明）">使用说明</button>
         </div>
       </div>
     </aside>

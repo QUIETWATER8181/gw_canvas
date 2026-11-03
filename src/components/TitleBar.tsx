@@ -11,7 +11,7 @@ interface Props {
   onOpenDraft(id: string): void
   onNewDraft(): void
   onNewSession(): void
-  onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
+  onOpenHelp(): void
 }
 
 function statusOf(state: AppState): { cls: string; text: string } {
@@ -38,25 +38,51 @@ function fmtAgo(ts: number): string {
 
 export function TitleBar({
   state, drafts, switching, onOpenSettings, onOpenExport, onOpenLibrary,
-  onOpenDraft, onNewDraft, onNewSession, onToast
+  onOpenDraft, onNewDraft, onNewSession, onOpenHelp
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [draftOpen, setDraftOpen] = useState(false)
   const barRef = useRef<HTMLDivElement>(null)
+  // 点标题栏按钮关菜单时，这一次点击只用来关菜单，不能再触发底下的按钮
+  // （否则「点 ⋯ 菜单」会变成「打开草稿库窗口」——作者实测踩到过）
+  const swallowClick = useRef(false)
   const st = statusOf(state)
   const conn = state.connections.find(c => c.id === state.activeConnectionId)
   const draft = state.draft
 
   useEffect(() => {
     if (!menuOpen && !draftOpen) return
-    const close = (e: MouseEvent) => {
-      if (barRef.current && !barRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
-        setDraftOpen(false)
-      }
+    const close = () => {
+      setMenuOpen(false)
+      setDraftOpen(false)
     }
-    window.addEventListener('mousedown', close)
-    return () => window.removeEventListener('mousedown', close)
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Element | null
+      // 菜单/下拉内部的点击交给它们自己的 onClick 收尾，别提前卸载
+      if (t?.closest?.('.tb-menu, .tb-drafts')) return
+      if (t && barRef.current?.contains(t)) {
+        swallowClick.current = true
+        setTimeout(() => { swallowClick.current = false }, 500)
+      }
+      close()
+    }
+    const onClickCapture = (e: MouseEvent) => {
+      if (!swallowClick.current) return
+      swallowClick.current = false
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('click', onClickCapture, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('click', onClickCapture, true)
+      window.removeEventListener('keydown', onKey)
+    }
   }, [menuOpen, draftOpen])
 
   // 草稿切换下拉里最多列 8 个：置顶在前，其余按最近修改
@@ -105,7 +131,7 @@ export function TitleBar({
         <span className="tb-scene-file mono">scene.json</span>
 
         {draftOpen && (
-          <div className="tb-drafts" onMouseLeave={() => setDraftOpen(false)}>
+          <div className="tb-drafts">
             <div className="tb-drafts-head">
               <span>最近草稿</span>
               <span className="tiny muted">{drafts.length} 个</span>
@@ -159,13 +185,14 @@ export function TitleBar({
           </button>
         </div>
         {menuOpen && (
-          <div className="tb-menu" onMouseLeave={() => setMenuOpen(false)}>
+          <div className="tb-menu">
             <button onClick={() => { void window.gewu.revealPath(state.scenePath); setMenuOpen(false) }}>打开场景文件夹</button>
             <button onClick={() => { void window.gewu.openFolder(state.workspace); setMenuOpen(false) }}>打开草稿目录</button>
             <button onClick={() => { void window.gewu.openFolder(state.exportSettings.resolvedDir); setMenuOpen(false) }}>打开导出文件夹</button>
             <button onClick={() => { onOpenLibrary(); setMenuOpen(false) }}>草稿库…</button>
             <button onClick={() => { onOpenSettings(); setMenuOpen(false) }}>模型设置…</button>
-            <button onClick={() => { setMenuOpen(false); onToast({ text: '提示：每个草稿的对话会单独保存，切回去能接着聊', kind: 'info' }) }}>草稿是怎么存的？</button>
+            <div className="tb-menu-sep" />
+            <button onClick={() => { onOpenHelp(); setMenuOpen(false) }}>使用说明（怎么用）…</button>
           </div>
         )}
       </div>
