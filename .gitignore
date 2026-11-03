@@ -4,6 +4,9 @@ out/
 dist/
 release/
 
+# 分发包（1.3GB，本地产物，见 _release/发送清单.md）
+_release/
+
 # 隔离运行时 378MB，不进仓库（用 scripts/setup-runtime.md 的说明重新获取）
 vendor/
 
