@@ -170,6 +170,8 @@ const CALLS = {
   empty: { name: 'scene_write', args: { scene: { version: 1, meta: { title: '空场景' } } } },
   emptyDraw: { name: 'scene_write', args: { scene: { version: 1, layers: [{ id: 'a', name: '空层' }] } } },
   img: { name: 'image_inspect', args: { path: 'assets/kf_a.png', cols: 48 } },
+  describe: { name: 'image_describe', args: { path: 'assets/kf_a.png' } },
+  describeFrame: { name: 'scene_render_frame', args: { t: 5, describe: true } },
   cmp: { name: 'image_compare', args: { first: 'assets/kf_a.png', last: 'assets/kf_b.png' } },
   multi: { name: 'scene_render_frame', args: { times: [0.5, 6, 11.5] } },
   export: { name: 'scene_export_video', args: { name: 'mock-export.mp4', from: 0, to: 2 } },
@@ -210,6 +212,36 @@ const server = createServer(async (req, res) => {
   const messages = payload.messages ?? []
   const toolMsgs = messages.filter(m => m.role === 'tool')
   console.log('[mock] request model=%s msgs=%d tools=%d toolResults=%d', payload.model, messages.length, (payload.tools ?? []).length, toolMsgs.length)
+
+  /**
+   * 视觉请求：content 是 [{type:'text'},{type:'image_url'}] 数组。
+   * 不管 MOCK_MODE 是什么，只要带图就回一段固定描述，方便测 image_describe。
+   */
+  const lastMsg = messages[messages.length - 1]
+  const hasImage = Array.isArray(lastMsg?.content) && lastMsg.content.some(c => c?.type === 'image_url')
+  if (hasImage) {
+    const imgPart = lastMsg.content.find(c => c?.type === 'image_url')
+    const url = String(imgPart?.image_url?.url ?? '')
+    const kb = Math.round((url.length * 0.75) / 1024)
+    const asked = lastMsg.content.find(c => c?.type === 'text')?.text ?? ''
+    console.log('[mock] vision request: image %dKB, question %d chars', kb, asked.length)
+    const desc =
+      '画面是深色背景（近黑的蓝灰），中央偏左有一束青色正弦波从左向右延伸，' +
+      '波峰朝上、振幅约占画面高度的 1/8；右侧竖着一根金色的细长矩形，代表偏振片，' +
+      '中间有一条白色虚线贯穿。右上角有白色文字「偏振光」，字号较大。' +
+      '整体像是一帧解释偏振的示意图。' +
+      `（mock：图 ${kb}KB，问题 ${asked.length} 字）`
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({
+      id: 'chatcmpl-vision',
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: payload.model ?? 'mock-vision',
+      choices: [{ index: 0, message: { role: 'assistant', content: desc }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 800, completion_tokens: 120, total_tokens: 920 }
+    }))
+    return
+  }
 
   /**
    * reject400：假装是「不认 stream_options」的中转站——带这个字段就 400。

@@ -28,8 +28,28 @@ if (-not $SkipBuild) {
 if (-not $SkipElectron) {
   Write-Host '[pkg] electron-builder --win --dir'
   if (Test-Path dist) { Remove-Item dist -Recurse -Force }
-  & $node node_modules\electron-builder\cli.js --win --dir 2>&1 | Select-Object -Last 4
-  if (-not (Test-Path 'dist\win-unpacked\Gewu.exe')) { throw 'Gewu.exe not produced' }
+  # 不要用管道接 electron-builder 的输出：它派生的子进程会一直握着 stdout，
+  # 管道永不结束，脚本就永远卡在最后一行（而工作其实早就做完了）。
+  Remove-Item '_eb.log', '_eb.err.log' -Force -ErrorAction SilentlyContinue
+  $eb = Start-Process -FilePath $node `
+    -ArgumentList 'node_modules\electron-builder\cli.js', '--win', '--dir' `
+    -RedirectStandardOutput (Join-Path $root '_eb.log') `
+    -RedirectStandardError (Join-Path $root '_eb.err.log') `
+    -WindowStyle Hidden -PassThru
+  $deadline = (Get-Date).AddMinutes(8)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path 'dist\win-unpacked\Gewu.exe') { break }
+    if ($eb.HasExited) { break }
+    Start-Sleep -Seconds 3
+  }
+  if (-not (Test-Path 'dist\win-unpacked\Gewu.exe')) {
+    Get-Content '_eb.log' -Encoding utf8 -ErrorAction SilentlyContinue | Select-Object -Last 5
+    throw 'Gewu.exe not produced'
+  }
+  # exe 先出现，asar 还没写完；等进程自己退出，最多再等 3 分钟
+  $eb.WaitForExit(180000) | Out-Null
+  if (-not $eb.HasExited) { $eb | Stop-Process -Force -ErrorAction SilentlyContinue }
+  Get-Content '_eb.log' -Encoding utf8 -ErrorAction SilentlyContinue | Select-Object -Last 3
 }
 
 $src = 'vendor\dsh-runtime'

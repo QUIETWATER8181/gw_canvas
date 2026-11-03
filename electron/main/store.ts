@@ -19,6 +19,11 @@ interface ConfigFile {
   version: 1
   connections: StoredConnection[]
   activeConnectionId: string | null
+  /**
+   * 专门用来「看图」的连接（多模态模型）。
+   * null = 跟着 activeConnectionId 走，适合只有一个多模态接口的情况。
+   */
+  visionConnectionId?: string | null
   lastScenePath?: string
 }
 
@@ -110,6 +115,8 @@ export class ConfigStore {
   remove(id: string): void {
     this.data.connections = this.data.connections.filter(c => c.id !== id)
     if (this.data.activeConnectionId === id) this.data.activeConnectionId = this.data.connections[0]?.id ?? null
+    // 删掉的正好是视觉模型，就退回「跟随当前对话连接」，别留一个悬空 id
+    if (this.data.visionConnectionId === id) this.data.visionConnectionId = null
     void this.save()
   }
 
@@ -126,6 +133,28 @@ export class ConfigStore {
     const apiKey = this.decrypt(c.key)
     if (!apiKey) return null
     return { id: c.id, name: c.name, kind: c.kind, baseUrl: c.baseUrl, model: c.model, apiKey }
+  }
+
+  getVisionId(): string | null {
+    return this.data.visionConnectionId ?? null
+  }
+
+  setVisionId(id: string | null): void {
+    if (id && !this.data.connections.some(c => c.id === id)) throw new Error('连接不存在')
+    this.data.visionConnectionId = id
+    void this.save()
+  }
+
+  /** 看图用的连接：指定了就用指定的，没指定就用当前对话连接 */
+  getVisionConnectionSecret(): { id: string; name: string; baseUrl: string; model: string; apiKey: string } | null {
+    const wanted = this.data.visionConnectionId
+    const c = wanted
+      ? this.data.connections.find(x => x.id === wanted)
+      : this.data.connections.find(x => x.id === this.data.activeConnectionId)
+    if (!c) return null
+    const apiKey = this.decrypt(c.key)
+    if (!apiKey) return null
+    return { id: c.id, name: c.name, baseUrl: c.baseUrl, model: c.model, apiKey }
   }
 
   getLastScenePath(): string | undefined { return this.data.lastScenePath }

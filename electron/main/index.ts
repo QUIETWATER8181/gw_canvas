@@ -111,6 +111,7 @@ function wireBridge() {
     pluginSource: resourceFile('gewu-tools.mjs'),
     dataRoot: join(app.getPath('userData'), 'agent'),
     getConnection: () => store.getActiveConnectionSecret(),
+    getVisionConnection: () => store.getVisionConnectionSecret(),
     getWorkspace: () => sceneStore.workspace,
     getScenePath: () => sceneStore.scenePath,
     onChat: msg => {

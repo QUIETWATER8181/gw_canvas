@@ -8,6 +8,7 @@ import type { AppState, ExportRequest, PromptContext } from '@shared/ipc'
 import type { Scene } from '@shared/scene'
 import { friendlyHttpError, modelsUrl } from './agent/http-errors'
 import { listVoices, synthesize } from './tts'
+import { describeImage } from './vision'
 
 /** fetch 抛出的底层错误（DNS / 证书 / 超时 / 连接被拒）也要说人话 */
 function explainFetchError(error: unknown, baseUrl: string): string {
@@ -35,6 +36,7 @@ function stateOf(deps: IpcDeps): AppState {
     scenePath: deps.sceneStore.scenePath,
     connections: deps.store.list(),
     activeConnectionId: deps.store.getActiveId(),
+    visionConnectionId: deps.store.getVisionId(),
     agent: deps.bridge.getStatus()
   }
 }
@@ -157,10 +159,32 @@ export function registerIpc(deps: IpcDeps): void {
     }
   })
 
+  // ---- 视觉模型 ----
+  ipcMain.handle('gewu:set-vision-connection', (_e, id: string | null) => {
+    deps.store.setVisionId(id)
+    return stateOf(deps)
+  })
+
+  ipcMain.handle('gewu:vision-describe', async (_e, input: { path?: string; dataUrl?: string; question?: string }) => {
+    const conn = deps.store.getVisionConnectionSecret()
+    if (!conn) {
+      return {
+        ok: false,
+        error: '还没有配置能看图的模型。到「模型设置 → 视觉模型」里选一个多模态接口（比如 gpt-4o、qwen-vl-max）。'
+      }
+    }
+    try {
+      const abs = input.path ? join(deps.sceneStore.workspace, input.path) : undefined
+      const { text, model, ms } = await describeImage(conn, { path: abs, dataUrl: input.dataUrl }, input.question)
+      return { ok: true, text, model, ms }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
   ipcMain.handle('gewu:send-prompt', async (_e, text: string, context?: PromptContext) => {
     await deps.bridge.prompt(text, context)
   })
-
   ipcMain.handle('gewu:cancel-prompt', () => { deps.bridge.cancel() })
 
   ipcMain.handle('gewu:new-session', async () => { await deps.bridge.newSession() })

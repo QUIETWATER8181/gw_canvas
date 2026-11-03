@@ -5,6 +5,7 @@ import { DshProcess } from './acp-process'
 import { ModelProxy } from './model-proxy'
 import { ToolGateway } from './tool-gateway'
 import { synthesize } from '../tts'
+import { describeImage } from '../vision'
 import type { AgentStatus, ChatMessage, ScenePatch, ToolInvocation, ToolResult } from '@shared/ipc'
 import type { Scene } from '@shared/scene'
 
@@ -26,6 +27,8 @@ export interface BridgeOptions {
   dataRoot: string
   pluginSource: string
   getConnection(): { id: string; name: string; kind: string; baseUrl: string; model: string; apiKey: string } | null
+  /** 看图用的连接（可能是另一个多模态接口）；没配就返回 null */
+  getVisionConnection?(): { id: string; name: string; baseUrl: string; model: string; apiKey: string } | null
   getWorkspace(): string
   getScenePath(): string
   onChat(msg: ChatMessage): void
@@ -65,6 +68,30 @@ export class AgentBridge {
   private lastUserText = ''
 
   constructor(private readonly o: BridgeOptions) {}
+
+  /**
+   * 把一张工作区里的图交给视觉模型，拿回中文描述。
+   * 没配视觉模型时给一句能照着做的提示，而不是抛底层报错。
+   */
+  private async describe(path: string, question?: string): Promise<string> {
+    const conn = this.o.getVisionConnection?.() ?? null
+    if (!conn) {
+      throw new Error(
+        '还没有可用的视觉模型，我看不到这张图。' +
+          '请让用户到「模型设置 → 视觉模型」里选一个多模态接口（gpt-4o / qwen-vl-max / glm-4v 之类），' +
+          '或者先用 image_inspect 看字符预览凑合判断。'
+      )
+    }
+    const abs = join(this.o.getWorkspace(), path)
+    try {
+      const { text, model, ms } = await describeImage(conn, { path: abs }, question)
+      return `【视觉模型 ${model}，用时 ${(ms / 1000).toFixed(1)}s】\n${text}`
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      if (/ENOENT/.test(msg)) throw new Error(`找不到图片 ${path}：确认它在工作区里（assets/ 下），或先用 asset_import 导入`)
+      throw error
+    }
+  }
 
   getStatus(): AgentStatus { return this.status }
 
@@ -436,6 +463,14 @@ export class AgentBridge {
       } else {
         lines.push('', '✓ 本帧所有图层执行无报错。')
       }
+      // describe: true 时顺便让视觉模型看一眼——字符预览看不出"画得像不像"
+      if (args.describe) {
+        try {
+          lines.push('', '【视觉模型看到的样子】', await this.describe(result.path))
+        } catch (error) {
+          lines.push('', `（想让视觉模型看图但没看成：${error instanceof Error ? error.message : String(error)}）`)
+        }
+      }
       return lines.join('\n')
     })
 
@@ -485,6 +520,14 @@ export class AgentBridge {
       if (!path) throw new Error('缺少 path')
       const cols = Math.max(24, Math.min(120, Number(args.cols ?? 64)))
       return await this.o.invokeRendererTool({ name: 'image_inspect', args: { path, cols } }, 60_000) as string
+    })
+
+    // 真·看图：字符预览只能看出明暗分布，构图/元素/文字得靠视觉模型
+    wrap('image_describe', async (args) => {
+      const path = String(args.path ?? '')
+      if (!path) throw new Error('缺少 path（工作区相对路径，比如 assets/kf_a.png）')
+      const question = typeof args.question === 'string' ? args.question : undefined
+      return await this.describe(path, question)
     })
 
     wrap('image_compare', async (args) => {

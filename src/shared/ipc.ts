@@ -45,6 +45,8 @@ export interface AppState {
   scenePath: string
   connections: ModelConnection[]
   activeConnectionId: string | null
+  /** 看图用的连接；null 表示跟随 activeConnectionId */
+  visionConnectionId?: string | null
   agent: AgentStatus
 }
 
@@ -110,6 +112,15 @@ export interface TtsVoice {
   culture: string
 }
 
+/** 视觉模型返回的一段描述 */
+export interface VisionResult {
+  ok: boolean
+  text?: string
+  model?: string
+  ms?: number
+  error?: string
+}
+
 /** preload 暴露给渲染进程的 API */
 export interface GewuApi {
   getState(): Promise<AppState>
@@ -130,6 +141,11 @@ export interface GewuApi {
   ttsVoices(): Promise<{ ok: boolean; voices: TtsVoice[]; error?: string }>
   /** 把文字合成成 wav 存到 assets/，用于字幕配音 */
   tts(input: { text: string; name?: string; voice?: string; rate?: number; volume?: number }): Promise<TtsResult>
+
+  /** 指定「看图」用哪条连接（null = 跟随当前对话连接） */
+  setVisionConnection(id: string | null): Promise<AppState>
+  /** 让视觉模型描述一张图：path 相对工作区，或直接给 dataUrl */
+  visionDescribe(input: { path?: string; dataUrl?: string; question?: string }): Promise<VisionResult>
 
   sendPrompt(text: string, context?: PromptContext): Promise<void>
   cancelPrompt(): Promise<void>

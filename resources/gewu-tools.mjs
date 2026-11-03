@@ -94,11 +94,12 @@ const tools = [
   },
   {
     name: 'scene_render_frame',
-    description: '渲染指定时刻并返回「字符预览 + 各图层实际占据范围 + 图层报错」，这是你唯一的眼睛。一次可给多个时刻（times，最多 4 个）来检查整段动画的走向。',
+    description: '渲染指定时刻并返回「字符预览 + 各图层实际占据范围 + 图层报错」，这是你的基本眼睛。一次可给多个时刻（times，最多 4 个）来检查整段动画的走向。加 describe:true 会再让视觉模型描述这一帧真正长什么样（慢、花钱，但能看出构图和"像不像"）。',
     parameters: {
       t: { type: 'number', description: '单个时刻（秒）' },
       times: { type: 'array', items: { type: 'number' }, description: '多个时刻（秒），最多 4 个；给了 times 就忽略 t' },
-      cols: { type: 'number', description: '字符预览列数，缺省 96；多帧时自动降到 72' }
+      cols: { type: 'number', description: '字符预览列数，缺省 96；多帧时自动降到 72' },
+      describe: { type: 'boolean', description: '是否再让视觉模型描述这一帧（仅单帧时生效）' }
     }
   },
   {
@@ -132,10 +133,18 @@ const tools = [
   },
   {
     name: 'image_inspect',
-    description: '「看」一张图片：返回字符预览、主色、平均亮度、细节密度和 8×5 分区平均色。用户给参考图/首帧/尾帧时用它了解画面内容。只看 assets/ 下的相对路径。',
+    description: '「看」一张图片的明暗分布：返回字符预览、主色、平均亮度、细节密度和 8×5 分区平均色。便宜快，但看不出「画的是什么」。要真正看懂内容用 image_describe。只看 assets/ 下的相对路径。',
     parameters: {
       path: { type: 'string', required: true, description: '图片相对路径，如 assets/frame1.png' },
       cols: { type: 'number', description: '字符预览列数，缺省 64，最多 120' }
+    }
+  },
+  {
+    name: 'image_describe',
+    description: '让视觉模型真正「看懂」一张图：返回对画面主体、位置、几何元素、配色、文字的中文描述。比 image_inspect 慢且要花钱，但构图、元素、文字只有它能看出来。用户给参考图/首帧/尾帧，或者你想确认自己画出来的到底是什么样，就用它。',
+    parameters: {
+      path: { type: 'string', required: true, description: '图片相对路径，如 assets/frame1.png 或 assets/preview-0_00.png' },
+      question: { type: 'string', description: '想特别问的点；缺省是「客观描述画面，供后续用代码复现」' }
     }
   },
   {

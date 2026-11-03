@@ -11,6 +11,8 @@ interface Props {
 const PRESETS: { label: string; kind: ProviderKind; baseUrl: string; model: string }[] = [
   { label: 'DeepSeek 官方', kind: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
   { label: 'DeepSeek 推理', kind: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-reasoner' },
+  { label: 'GPT-4o（能看图）', kind: 'openai-compatible', baseUrl: '', model: 'gpt-4o' },
+  { label: 'Qwen-VL（能看图）', kind: 'openai-compatible', baseUrl: '', model: 'qwen-vl-max' },
   { label: '同济网关', kind: 'openai-compatible', baseUrl: '', model: '' },
   { label: '中转站 / 其他', kind: 'openai-compatible', baseUrl: '', model: '' }
 ]
@@ -93,6 +95,11 @@ export function SettingsModal({ open, state, onClose, onChanged }: Props) {
     if (editing?.id === c.id) newConnection()
   }
 
+  async function pickVision(id: string) {
+    const next = await window.gewu.setVisionConnection(id || null)
+    onChanged(next)
+  }
+
   return (
     <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="modal">
@@ -128,6 +135,27 @@ export function SettingsModal({ open, state, onClose, onChanged }: Props) {
           </div>
 
           <div className="conn-form">
+            <div className="vision-pick">
+              <div className="conn-list-head">
+                <span>视觉模型（agent 用它「看图」）</span>
+              </div>
+              <select
+                className="select vision-select"
+                value={state.visionConnectionId ?? ''}
+                onChange={e => void pickVision(e.target.value)}
+              >
+                <option value="">跟随当前对话连接</option>
+                {state.connections.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} · {c.model}</option>
+                ))}
+              </select>
+              <span className="hint">
+                主模型不能看图也没关系：这里指一个多模态接口（gpt-4o / qwen-vl-max / glm-4v），
+                agent 就能用 <code>image_describe</code> 看懂参考图和自己的渲染结果。
+                不填就一直跟随上面的「使用中」连接。
+              </span>
+            </div>
+
             <div className="preset-row">
               {PRESETS.map(p => (
                 <button key={p.label} className="tb-chip" onClick={() => applyPreset(p)}>{p.label}</button>

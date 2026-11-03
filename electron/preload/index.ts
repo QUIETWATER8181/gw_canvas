@@ -26,6 +26,8 @@ const api: GewuApi = {
   listAssets: () => ipcRenderer.invoke('gewu:list-assets'),
   ttsVoices: () => ipcRenderer.invoke('gewu:tts-voices'),
   tts: input => ipcRenderer.invoke('gewu:tts', input),
+  setVisionConnection: id => ipcRenderer.invoke('gewu:set-vision-connection', id) as Promise<AppState>,
+  visionDescribe: input => ipcRenderer.invoke('gewu:vision-describe', input),
 
   sendPrompt: (text, context) => ipcRenderer.invoke('gewu:send-prompt', text, context),
   cancelPrompt: () => ipcRenderer.invoke('gewu:cancel-prompt'),
