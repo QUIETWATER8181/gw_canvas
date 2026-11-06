@@ -28,6 +28,15 @@ export default function App() {
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'err' | 'info' } | null>(null)
   const [exportJob, setExportJob] = useState<{ running: boolean; frame: number; total: number; phase: string } | null>(null)
   const agentSourceRef = useRef(false)
+  /** 左右栏宽度：可拖拽，记在本机；默认给内容留足空间 */
+  const [leftW, setLeftW] = useState(() => {
+    const saved = Number(localStorage.getItem('gewu.leftW'))
+    return Number.isFinite(saved) && saved >= 240 ? saved : 340
+  })
+  const [rightW, setRightW] = useState(() => {
+    const saved = Number(localStorage.getItem('gewu.rightW'))
+    return Number.isFinite(saved) && saved >= 280 ? saved : 400
+  })
 
   const editor = useEditorState(scene)
 
@@ -249,6 +258,38 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready])
 
+  useEffect(() => {
+    localStorage.setItem('gewu.leftW', String(leftW))
+  }, [leftW])
+
+  useEffect(() => {
+    localStorage.setItem('gewu.rightW', String(rightW))
+  }, [rightW])
+
+  /** 拖左右栏边界：夹住舞台最小 360px，双击复位 */
+  function startPanelResize(side: 'left' | 'right', e: React.PointerEvent) {
+    e.preventDefault()
+    const startX = e.clientX
+    const startLeft = leftW
+    const startRight = rightW
+    const minCenter = 360
+    const move = (ev: PointerEvent) => {
+      if (side === 'left') {
+        const max = Math.max(240, window.innerWidth - startRight - minCenter - 12)
+        setLeftW(Math.round(Math.min(max, Math.max(240, startLeft + ev.clientX - startX))))
+      } else {
+        const max = Math.max(280, window.innerWidth - startLeft - minCenter - 12)
+        setRightW(Math.round(Math.min(max, Math.max(280, startRight - (ev.clientX - startX)))))
+      }
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   if (!ready || !appState) {
     return (
       <div className="boot">
@@ -277,9 +318,24 @@ export default function App() {
           onOpenHelp={() => setHelpOpen(true)}
         />
         <div className="workbench">
-          <div className="wb-top">
+          <div
+            className="wb-top"
+            style={{ gridTemplateColumns: `${leftW}px 6px minmax(0, 1fr) 6px ${rightW}px` }}
+          >
             <LeftPanel onToast={setToast} />
+            <div
+              className="panel-resizer"
+              title="拖动调整左栏宽度 · 双击复位"
+              onPointerDown={e => startPanelResize('left', e)}
+              onDoubleClick={() => setLeftW(340)}
+            />
             <Stage onToast={setToast} exportJob={exportJob} />
+            <div
+              className="panel-resizer"
+              title="拖动调整右栏宽度 · 双击复位"
+              onPointerDown={e => startPanelResize('right', e)}
+              onDoubleClick={() => setRightW(400)}
+            />
             <RightPanel chat={chat} agent={appState.agent} onOpenSettings={() => setSettingsOpen(true)} onOpenHelp={() => setHelpOpen(true)} onToast={setToast} />
           </div>
           <Timeline />

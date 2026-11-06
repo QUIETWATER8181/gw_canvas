@@ -1634,3 +1634,65 @@
   font-size: 11px;
   line-height: 1.55;
 }
+
+/* =====================================================================
+ * 2026-11-06 追加：左右栏可拖拽 + 左栏窄宽度自适应
+ * ===================================================================== */
+.panel-resizer {
+  width: 6px;
+  min-width: 6px;
+  cursor: col-resize;
+  background: var(--line-soft);
+  position: relative;
+  z-index: 5;
+  touch-action: none;
+}
+.panel-resizer:hover,
+.panel-resizer:active { background: var(--accent); }
+.panel-resizer::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  border-radius: 1px;
+  background: rgba(125, 139, 150, 0.45);
+}
+.panel-resizer:hover::after { background: rgba(4, 22, 27, 0.65); }
+
+/* 左栏：宽度变化时内容自己换行/换列，不横向溢出 */
+.lp-body { overflow-x: hidden; }
+.lp-section-head { min-width: 0; }
+.lp-section-head > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+.asset-thumb { height: auto; aspect-ratio: 4 / 3; }
+.search-grid { grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); }
+.add-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+.sub-time { flex-wrap: wrap; row-gap: 6px; }
+.tts-bar { flex-wrap: wrap; row-gap: 6px; }
+.track-ctl { flex-wrap: wrap; row-gap: 5px; }
+.ref-meta { flex-wrap: wrap; }
+.kf-row { flex-wrap: wrap; row-gap: 6px; }
+.kf-slot { min-width: 0; }
+.search-card .btn.block { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 音轨行在窄栏里上下排，不横向溢出 */
+.track-ctl { flex-direction: column; align-items: stretch; gap: 6px; }
+.track-field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.track-field.grow { flex: 1 1 auto; }
+.track-field input { width: 100%; min-width: 0; }
+.track-field input[type="range"] { min-width: 0; }
+.track-row { overflow: hidden; }

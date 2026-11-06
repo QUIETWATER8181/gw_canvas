@@ -594,11 +594,10 @@ export function LeftPanel({ onToast }: Props) {
           </>
         )}
         </div>
-      </div>
-
-      <div className="lp-foot">
-        <span className="tiny muted">场景文件</span>
-        <button className="link" onClick={() => void window.gewu.revealPath(editor.state.scene.meta.title ? 'scene.json' : 'scene.json')}>scene.json</button>
+        <div className="lp-foot">
+          <span className="tiny muted">场景文件</span>
+          <button className="link" onClick={() => void window.gewu.revealPath(editor.state.scene.meta.title ? 'scene.json' : 'scene.json')}>scene.json</button>
+        </div>
       </div>
     </aside>
   )

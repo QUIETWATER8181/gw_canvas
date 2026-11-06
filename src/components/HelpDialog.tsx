@@ -90,6 +90,10 @@ export function HelpDialog({ open, onClose }: { open: boolean; onClose(): void }
 
           {tab === 'canvas' && (
             <>
+              <h3>布局</h3>
+              <Row k="左右栏边界">拖动竖线调宽，双击复位；左栏最窄 240、右栏最窄 280，舞台至少留 360</Row>
+              <Row k="时间轴">拖顶边调高，点右侧箭头收起/展开</Row>
+
               <h3>选中</h3>
               <Row k="单击">选中鼠标下最里层的那个元素</Row>
               <Row k={<><K>Ctrl</K> + 单击</>}>加选 / 减选（多选后画布顶部会出现对齐条）</Row>
