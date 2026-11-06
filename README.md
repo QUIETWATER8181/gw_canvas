@@ -43,19 +43,18 @@ Key 用系统 `safeStorage` 加密后存在 `%APPDATA%\gewu-video\config.json`�
 
 ```
 ┌ 标题栏 ── 草稿名▾ · 状态 · 草稿库 · 新会话 · 导出 ────────┐
-├ 左栏 264 ┬──── 画布 ────┬ 右栏 380 ──┤
-│ 开始     │  实时预览     │ AI 助手     │
-│ 素材     │  可框选区域   │ 图层        │
-│ 参考图   │              │ 属性/代码   │
-├──────────┴── 时间轴 ────┴────────────┤
+├ 左栏 316（图标栏 62 + 内容 254）┬ 画布 ┬ 右栏 380 ┤
+│ 开始 / 媒体 / 搜索 / 音频 / 字幕 / 图生 │ 实时预览 │ AI 助手 / 图层 / 属性 │
+│                                    │ 可框选   │ 进度可收起            │
+├──────────────── 时间轴（横跨整窗，可拖高 / 可收起） ────────────────┤
 ```
 
+- **左栏图标栏**：开始、媒体、搜索、音频、字幕、图生视频，像剪映左侧的工具条。
 - **标题栏「草稿名」**：点开是最近的草稿列表（置顶的带 ★），可直接切换或新建；旁边的「草稿库」开独立窗口。
-- **左栏「开始」**：6 个物理预设（偏振、法拉第、波动、抛体、透镜、场），点一下就把需求发给 AI。
 - **画布**：拖动空白处可以框选一块区域，松手后自动把这块的设计坐标发给 AI，让它只改这里。
-- **时间轴**：拖播放头预览；图层条可拖动改时间区间、拖两端裁剪。
-- **右栏「图层」**：点选图层 → 「属性」改名字/时间/透明度/混合模式，「代码」直接改绘制代码，`Ctrl+Enter` 应用。
-- **导出**：右上角按钮先弹对话框（文件名 / 目录 / 整段或一段），确认后逐帧渲染 → WebCodecs 编码 → mp4（含音频和字幕）。
+- **时间轴**：整条横跨窗口（不再是预览栏里的一小块），顶边可拖动改高度、可一键收起；拖播放头预览，图层条可拖动改时间区间、拖两端裁剪，拖出右边界松手会自动延长时长。
+- **右栏**：AI 助手 / 图层 / 属性三个标签。AI 标签顶部是**可收起的生成进度卡**（耗时、步骤、暂停/继续/结束）。
+- **导出**：右上角按钮先弹对话框（文件名 / 目录 / 整段或一段 / 清晰度 / 帧率 / 码率），确认后逐帧渲染 → WebCodecs 编码 → mp4（含音频和字幕）。
 
 ## 现在能做什么
 
@@ -66,9 +65,70 @@ Key 用系统 `safeStorage` 加密后存在 `%APPDATA%\gewu-video\config.json`�
 | 图生视频 | ✅ 可用 | 左栏「图生视频」：选首帧 + 尾帧 + 时长 → agent 自己看图、算运动向量、补出中间过程 |
 | 多草稿 | ✅ 可用 | 标题栏下拉快速切换，**独立「草稿库」窗口**搜索/排序/置顶/改名/复制/删除（软删除进 `trash/`）；每个草稿有自己的场景、素材、对话和成片 |
 | 导出位置 | ✅ 可用 | 导出对话框里选目录、记住最近 8 个、同名自动 `-1` 不覆盖；设置里可以固定一个目录「以后都放这里」 |
+| 导出画质 | ✅ 可用 | 清晰度（4K / 2K / 1080p / 720p / 480p）、帧率（24/25/30/50/60/120/150）、码率（高/均衡/小/自定义 Mbps），对话框预估文件大小；4K 直接按 3840×2160 渲染，不是放大 |
+| 知识库 | ✅ 可用 | 物理 16 条 / 数学 13 条 / 分镜 11 条，agent 用 `knowledge_search` 按需检索；`g.math` 新增 `\sqrt[n]`、`\overline/\underline/\tilde/\ddot`、`\iint/\iiint`、`\mathbb` 等 |
+| AI 暂停 | ✅ 可用 | 右栏进度卡：「暂停生成」真停请求、不再花 token，已生成内容保留；「继续」从断点接着做；进度卡可收起 |
+| 时长自适应 | ✅ 可用 | 「自动」打开后时长 = 最晚结束的图层/音轨/字幕；拖长素材自动变长、删掉自动变短；「适配」一次性对齐；拖剪辑块出界松手也会延长 |
+| 进出场动画 | ✅ 可用 | 每个元素可配 `enter`/`exit`：渐隐、滑入、缩放、擦除，0.4–0.6s 默认节奏；AI 写场景时默认带渐显，不再硬切 |
+| 音效 | ✅ 可用 | 12 个现场合成音效（呼啸/轻扫/上升/转场/弹出/点击/滴答/打字/叮/完成/错误/撞击），可试听、按播放头加入、按图层入场自动铺；导出混进 mp4，带 10–60ms 防爆音淡入淡出 |
+| 联网找素材 | ✅ 可用 | 左栏「搜索」查 Wikimedia Commons / Openverse，缩略图预览、一键下载进 `assets/`、自动写 `assets/credits.json` 署名；AI 也有 `asset_search` / `asset_download` |
+| 素材生成 | ✅ 可用 | AI 可用 `asset_svg` 现场生成图标/示意图 SVG；公式优先用 `g.math` |
 | 配音 | ✅ 可用 | 素材里的音频可加音轨；也能用系统 SAPI 离线合成（字幕一键配音，agent 可调 `tts_speak`） |
 | 字幕 | ✅ 可用 | `scene.subtitles` 能渲染能导出，有增删改 UI；没有逐句对齐工具 |
 | Three.js 三维 | ✅ 可用 | `three.*` 原语 + 一个真 3D 样板场景；作者说先放一放 |
+
+## 音效（左栏「音频」）
+
+音效不是下载来的，是**现场合成**的：`src/shared/sfx.ts` 用噪声 + 扫频 + 包络生成 12 个预设，
+主进程和渲染进程都能跑，不需要联网、没有第三方素材授权问题。
+
+| 预设 | 用在哪 |
+| --- | --- |
+| `whoosh` 呼啸 / `swoosh` 轻扫 | 画面/元素快速进场 |
+| `riser` 上升 / `transition` 转场 | 悬念、蓄力、镜头切换 |
+| `pop` 弹出 / `click` 点击 / `tick` 滴答 / `typing` 打字 | 标签、数据点、逐项出现 |
+| `ding` 叮 / `success` 完成 / `error` 错误 | 结论、重点、否定 |
+| `impact` 撞击 | 碰撞、爆炸、强调 |
+
+- 点 ▶ 试听，点 ＋ 加到播放头，音效作为一条音轨出现在时间轴。
+- 「按图层入场铺音效」是默认配置方案：组合/代码→呼啸，文字→弹出，图片→轻扫，形状→滴答。
+- 音量默认 0.8；有旁白建议 0.4–0.6。音效轨自动带 10–60ms 淡入淡出，避免爆音。
+- agent 也能用 `sfx_add({ preset, at, volume })`，`at` 一般取图层的 `start`/`end`。
+
+## 找素材（左栏「搜索」）
+
+- 搜 **Wikimedia Commons**（默认）或 **Openverse**，不需要 Key；英文关键词命中率更高。
+- 结果带缩略图、尺寸、许可证、作者；点「插入画面」会下载进当前草稿 `assets/`，按播放头放到时间轴并加 0.45s 渐显。
+- 下载会追加到 `assets/credits.json`，发布时照着标注作者/许可证。
+- **只有主进程能联网**：域名白名单（Wikimedia / 已知 CC 图床）、只收图片、单张 ≤30MB、拒绝重定向到白名单外。
+- agent 侧对应 `asset_search({ query, source })` → `asset_download({ id })`；图标/示意图还可以用 `asset_svg({ name, svg })` 现场画。
+
+## 导出画质
+
+导出对话框里可选：
+
+- **清晰度**：4K（3840×2160）/ 2K（2560×1440）/ 1080p / 720p / 480p / 跟随场景
+- **帧率**：24 / 25 / 30 / 50 / 60 / 120 / 150
+- **码率**：高 / 均衡 / 小 / 自定义（最高 120 Mbps）；对话框实时预估文件大小
+
+4K 不是把 1080p 放大：导出时直接按输出分辨率渲染（`ctx.scale`），文字/矢量仍然清晰。
+**4K/150 能导，但很吃机器**：本机实测 4K@150 的 30 帧测试片可出，但渲染/编码明显变慢、文件更大；
+先导 0.2–1s 短片段试，确认编码器支持再导整段（不支持时会返回明确报错）。
+导出结果会报告 `宽×高@帧率`，例如 `3840×2160@30`、`1280×720@150`、`3840×2160@150`。
+
+## 知识库
+
+`resources/knowledge/` 下有三份按需检索的知识：
+
+| 文件 | 内容 |
+| --- | --- |
+| `physics.md` | 运动学、牛顿、圆周/引力、能量动量、振动波、几何光学、波动光学/偏振、静电、电路、磁场、电磁感应、热学、流体、相对论、量子、科普叙事 |
+| `math.md` | 函数图像、三角、向量、导数、积分、微分方程、复数相量、线代、概率、级数、坐标几何、可视化模板、TeX 写法 |
+| `storyboard.md` | 五拍结构、镜头类型、运镜、转场、节奏、文字层级、色彩语义、声音设计、8 个分镜模板、常见错误、自检清单 |
+
+agent 用 `knowledge_search({ query, topic })` 只取命中的 1–2 条；不把整份知识塞进 prompt。
+条目格式是 `## 标题 | 关键词` + 正文（公式/直觉/画面做法/常见错误），加新条目只要往 md 里写一段。
+详细设计见 [docs/知识库方案.md](docs/知识库方案.md)。
 
 ## 目录
 
@@ -91,17 +151,24 @@ src/
   engine/
     draw.ts             绘图工具箱（g.*）
     math.ts             轻量 TeX 子集排版
-    render.ts           场景 → Canvas
+    render.ts           场景 → Canvas（含 enter/exit 进出场动画）
     preview.ts          字符预览 + 图层包围盒（AI 的“眼睛”）
-    export.ts           WebCodecs + mp4-muxer 导出
-  state/editor.ts       编辑器状态（撤销/重做/持久化）
+    export.ts           WebCodecs + mp4-muxer 导出（清晰度/帧率/码率）
+  state/editor.ts       编辑器状态（撤销/重做/持久化、时长跟随素材）
   components/           UI
+    AssetSearchPanel.tsx 联网素材检索（左栏「搜索」）
+    SfxPanel.tsx        音效库（试听 / 加入 / 按入场自动铺）
     DraftLibrary.tsx    草稿库窗口（drafts.html 的根组件）
-    ExportDialog.tsx    导出位置/范围选择
+    ExportDialog.tsx    导出位置/范围/画质选择
   drafts-main.tsx       草稿库窗口入口
 resources/
   AGENTS.md             AI 的场景 DSL 说明书（会拷进工作区）
-  gewu-tools.mjs        AI 能调用的 14 个工具
+  gewu-tools.mjs        AI 能调用的 20 个工具
+  knowledge/            物理 / 数学 / 分镜知识库（按需检索，不整份塞 prompt）
+electron/main/
+  web-search.ts         素材检索（Commons / Openverse，主进程独占网络 + 白名单）
+  knowledge.ts          本地知识库加载与关键词检索（中文 2-gram）
+  agent/bridge.ts       会话编排（暂停/继续、批量改场景、音效、找素材、查知识）
 vendor/dsh-runtime/     隔离的 DSH 运行时（Node 22 + @deepseek-ai/dsh）
 ```
 
@@ -109,10 +176,12 @@ vendor/dsh-runtime/     隔离的 DSH 运行时（Node 22 + @deepseek-ai/dsh）
 
 ```jsonc
 {
-  "canvas": { "width": 1920, "height": 1080, "fps": 30, "duration": 12 },
+  "canvas": { "width": 1920, "height": 1080, "fps": 30, "duration": 12, "autoDuration": true },
   "layers": [
     {
       "id": "wave", "name": "光波", "start": 0, "end": 12,
+      "enter": { "kind": "fade", "dur": 0.6 },
+      "exit": { "kind": "fade", "dur": 0.4 },
       "draw": "for (let x = 0; x < width; x += 4) { ... }"
     }
   ]
@@ -123,6 +192,10 @@ vendor/dsh-runtime/     隔离的 DSH 运行时（Node 22 + @deepseek-ai/dsh）
 完整 API 见 `resources/AGENTS.md` 或界面右下角「API 速查」。
 
 硬约束：**画面只能依赖 `t`**（导出是逐帧渲染，不能有状态漂移）。
+
+`enter` / `exit` 是进出场动画：`fade`（默认）、`slide-left/right/up/down`、`zoom-in/out`、`wipe-left/right`；
+`dur` 秒、`delay` 秒、`ease`（`linear/outCubic/inOutCubic/outBack`）、`distance` 像素。
+`autoDuration: true` 时，时长自动等于最晚结束的图层/音轨/字幕。
 
 图片用 `g.image('assets/foo.png', cx, cy, 640, 360)`，或 `ctx.drawImage(asset('assets/foo.png'), …)`
 （`asset()` 返回的是已加载好的 `<img>`，场景渲染前会自动预加载）。
@@ -217,7 +290,9 @@ $env:MOCK_MODE='text'; $env:MOCK_DUMP="$PWD\_dump.json"; node scripts/mock-opena
 ## 安全边界
 
 - 运行时里所有宿主工具（bash/pwsh/fs/skill/subagent/workflow/web）都在 `gewu-acp.patch.yml` 里关掉了。
-- AI 只能通过工具网关碰 `scene.json` 和 `assets/`，没有 shell、没有网络、读不到系统文件。
+- AI 只能通过工具网关碰 `scene.json` 和 `assets/`，没有 shell、读不到系统文件。
+- **联网只有一条窄路**：主进程的 `AssetSearch`（`electron/main/web-search.ts`），
+  域名白名单 + 只下载图片 + 30MB 上限 + 拒绝重定向到白名单外；agent 只能通过 `asset_search` / `asset_download` 使用它。
 - 子进程跑在 `DSH_PERMISSION_MODE=danger-full-access`：**不是放权，而是已经没东西可放**——
   所有能产生文件/命令副作用的能力都摘掉了，留着 `read-only` 只会往 prompt 里塞「你无法修改文件」这种与事实相反的提示。
 - 渲染进程必须开 `'unsafe-eval'`——「代码即画面」是这个产品的设计前提，不是疏漏。

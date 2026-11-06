@@ -33,7 +33,15 @@ const api: GewuApi = {
 
   sendPrompt: (text, context) => ipcRenderer.invoke('gewu:send-prompt', text, context),
   cancelPrompt: () => ipcRenderer.invoke('gewu:cancel-prompt'),
+  pausePrompt: () => ipcRenderer.invoke('gewu:pause-prompt'),
+  resumePrompt: () => ipcRenderer.invoke('gewu:resume-prompt'),
+  getUsage: () => ipcRenderer.invoke('gewu:get-usage'),
   newSession: () => ipcRenderer.invoke('gewu:new-session'),
+  saveAsset: (name, bytes) => ipcRenderer.invoke('gewu:save-asset', name, bytes),
+  searchAssets: input => ipcRenderer.invoke('gewu:search-assets', input),
+  downloadAsset: item => ipcRenderer.invoke('gewu:download-asset', item),
+  listCredits: () => ipcRenderer.invoke('gewu:list-credits'),
+  knowledgeSearch: input => ipcRenderer.invoke('gewu:knowledge-search', input),
 
   chooseExportPath: req => ipcRenderer.invoke('gewu:choose-export-path', req),
   saveExport: (outPath, bytes) => ipcRenderer.invoke('gewu:save-export', outPath, bytes),

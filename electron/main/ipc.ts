@@ -6,11 +6,13 @@ import type { ConfigStore } from './store'
 import type { SceneStore } from './scene-store'
 import type { DraftStore } from './draft-store'
 import type { AgentBridge } from './agent/bridge'
-import type { AppState, ExportRequest, ExportSettings, PromptContext } from '@shared/ipc'
+import type { AppState, AssetCredit, AssetSearchItem, ExportRequest, ExportSettings, KnowledgeTopic, PromptContext } from '@shared/ipc'
 import type { Scene } from '@shared/scene'
 import { friendlyHttpError, modelsUrl } from './agent/http-errors'
 import { listVoices, synthesize } from './tts'
 import { describeImage } from './vision'
+import type { AssetSearch } from './web-search'
+import type { KnowledgeBase } from './knowledge'
 
 /** fetch 抛出的底层错误（DNS / 证书 / 超时 / 连接被拒）也要说人话 */
 function explainFetchError(error: unknown, baseUrl: string): string {
@@ -31,6 +33,10 @@ export interface IpcDeps {
   /** 当前草稿的 SceneStore（切草稿时会被替换，所以每次都取新的） */
   getSceneStore(): SceneStore
   bridge: AgentBridge
+  /** 联网素材检索（主进程独占网络） */
+  search: AssetSearch
+  /** 本地知识库 */
+  knowledge: KnowledgeBase
   getWindow(): BrowserWindow | null
   /** 切草稿：换 sceneStore、重启 agent、广播 */
   switchDraft(id: string): Promise<void>
@@ -265,10 +271,59 @@ export function registerIpc(deps: IpcDeps): void {
     await deps.bridge.prompt(text, context)
   })
   ipcMain.handle('gewu:cancel-prompt', () => { deps.bridge.cancel() })
+  ipcMain.handle('gewu:pause-prompt', () => { deps.bridge.pause() })
+  ipcMain.handle('gewu:resume-prompt', async () => { await deps.bridge.resume() })
+  ipcMain.handle('gewu:get-usage', () => deps.bridge.getUsage())
 
   ipcMain.handle('gewu:new-session', async () => {
     await deps.bridge.newSession()
     await deps.drafts.clearChat()
+  })
+
+  // ---- 素材检索（主进程联网；下载落进当前草稿 assets/） ----
+  ipcMain.handle('gewu:search-assets', (_e, input: { query: string; source?: 'commons' | 'openverse'; limit?: number }) => {
+    return deps.search.search(String(input?.query ?? ''), input?.source ?? 'commons', Number(input?.limit ?? 16))
+  })
+
+  ipcMain.handle('gewu:download-asset', (_e, item: AssetSearchItem) => {
+    return deps.search.download(deps.getSceneStore().workspace, item)
+  })
+
+  ipcMain.handle('gewu:list-credits', async (): Promise<AssetCredit[]> => {
+    try {
+      const raw = await readFile(join(deps.getSceneStore().workspace, 'assets', 'credits.json'), 'utf8')
+      const list = JSON.parse(raw) as AssetCredit[]
+      return Array.isArray(list) ? list : []
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('gewu:knowledge-search', (_e, input: { query: string; topic?: KnowledgeTopic; limit?: number }) => {
+    const query = String(input?.query ?? '').trim()
+    const topic = input?.topic
+    const hits = deps.knowledge.search(query, topic, Number(input?.limit ?? 2))
+    return {
+      ok: hits.length > 0,
+      query,
+      ...(topic ? { topic } : {}),
+      hits,
+      ...(hits.length ? {} : { catalog: deps.knowledge.catalog() })
+    }
+  })
+
+  /** 渲染进程生成的二进制（音效 wav / 程序化图片）写进 assets/ */
+  ipcMain.handle('gewu:save-asset', async (_e, name: string, bytes: Uint8Array) => {
+    try {
+      const assetsDir = join(deps.getSceneStore().workspace, 'assets')
+      await mkdir(assetsDir, { recursive: true })
+      const safe = (name || `asset-${Date.now()}`).replace(/[^\w.\-\u4e00-\u9fa5]/g, '_').slice(0, 120)
+      const full = join(assetsDir, safe)
+      await writeFile(full, Buffer.from(bytes))
+      return { ok: true, path: `assets/${safe}` }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
   })
 
   // ---- 草稿 ----

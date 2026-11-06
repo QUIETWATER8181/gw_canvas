@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { Scene, SceneGuides, SceneLayer } from '../shared/scene'
-import { emptyScene } from '../shared/scene'
+import { applyAutoDuration, contentEnd, emptyScene, extendDurationTo } from '../shared/scene'
 import {
   cloneTree, collectIds, findLayer, getAt, insertAt, moveAt, nextLayerId,
   removeAt, removeMany, replaceAt, selfBox, unionBox, updateAt
@@ -29,8 +29,8 @@ export interface EditorApi {
   toggleSelect(id: string): void
   setTime(t: number): void
   setPlaying(p: boolean): void
-  updateScene(updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean; mergeMs?: number }): void
-  updateLayer(id: string, patch: Partial<SceneLayer>, opts?: { label?: string; mergeMs?: number }): void
+  updateScene(updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean; mergeMs?: number; transient?: boolean; noExtend?: boolean }): void
+  updateLayer(id: string, patch: Partial<SceneLayer>, opts?: { label?: string; mergeMs?: number; transient?: boolean }): void
   addLayer(layer: SceneLayer, parentId?: string | null): void
   removeLayer(id: string): void
   removeLayers(ids: string[]): void
@@ -47,6 +47,8 @@ export interface EditorApi {
   paste(): string[]
   setGuides(guides: SceneGuides): void
   reorderLayer(from: number, to: number): void
+  /** 时长跟随素材（打开 autoDuration 并立即对齐） */
+  fitDuration(): void
   undo(): void
   redo(): void
   canUndo: boolean
@@ -115,10 +117,18 @@ export function useEditorState(initial: Scene): EditorApi {
     saveTimer.current = setTimeout(() => { void persist(s) }, 600)
   }, [persist])
 
-  const updateScene = useCallback((updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean; mergeMs?: number }) => {
+  const updateScene = useCallback((updater: (scene: Scene) => Scene, opts?: { label?: string; persist?: boolean; mergeMs?: number; transient?: boolean; noExtend?: boolean }) => {
     setScene(prev => {
-      const next = updater(prev)
+      let next = updater(prev)
       if (next === prev) return prev
+      if (!opts?.transient) {
+        // 时长跟素材走：autoDuration 打开时对齐到内容；没打开时内容超长也自动延长
+        next = applyAutoDuration(next)
+        if (!opts?.noExtend) {
+          const end = contentEnd(next)
+          if (end > next.canvas.duration + 0.05) next = extendDurationTo(next, end)
+        }
+      }
       const label = opts?.label ?? '编辑'
       const now = Date.now()
       // 同一次连续操作（如拖拽剪辑块）合并成一条撤销记录：
@@ -159,7 +169,7 @@ export function useEditorState(initial: Scene): EditorApi {
     })
   }, [refreshFlags, scheduleSave])
 
-  const updateLayer = useCallback((id: string, patch: Partial<SceneLayer>, opts?: { label?: string; mergeMs?: number }) => {
+  const updateLayer = useCallback((id: string, patch: Partial<SceneLayer>, opts?: { label?: string; mergeMs?: number; transient?: boolean }) => {
     updateScene(s => {
       const hit = findLayer(s.layers, id)
       if (!hit) return s
@@ -393,6 +403,17 @@ export function useEditorState(initial: Scene): EditorApi {
     }, { label: '调整图层顺序' })
   }, [updateScene])
 
+  /** 一次性把时长对齐到素材结束（不强制打开「自动」） */
+  const fitDuration = useCallback(() => {
+    updateScene(s => {
+      const end = contentEnd(s)
+      if (end < 0.1) return s
+      const next = Math.max(1, Math.round(end * 10) / 10)
+      if (Math.abs(next - s.canvas.duration) < 0.05) return s
+      return { ...s, canvas: { ...s.canvas, duration: next } }
+    }, { label: '适配素材时长', noExtend: true })
+  }, [updateScene])
+
   const undo = useCallback(() => {
     const entry = undoStack.current.pop()
     if (!entry) return
@@ -427,6 +448,11 @@ export function useEditorState(initial: Scene): EditorApi {
   const setTime = useCallback((t: number) => {
     setTimeState(Math.max(0, Math.min(sceneRef.current.canvas.duration, t)))
   }, [])
+
+  // 时长变短（自动对齐/裁剪）时，播放头不能停在时间轴外面
+  useEffect(() => {
+    setTimeState(t => (t > scene.canvas.duration ? scene.canvas.duration : t))
+  }, [scene.canvas.duration])
 
   // 全局快捷键（画布上的方向键/删除由 Stage 自己处理，这里只兜底时间轴操作）
   useEffect(() => {
@@ -507,13 +533,14 @@ export function useEditorState(initial: Scene): EditorApi {
     paste,
     setGuides,
     reorderLayer,
+    fitDuration,
     undo,
     redo,
     canUndo,
     canRedo,
     save,
     replaceScene
-  }), [scene, selection, time, playing, dirty, saving, lastSavedAt, select, selectMany, toggleSelect, setTime, updateScene, updateLayer, addLayer, removeLayer, removeLayers, duplicate, group, ungroup, reorder, moveTo, copy, paste, setGuides, reorderLayer, undo, redo, canUndo, canRedo, save, replaceScene])
+  }), [scene, selection, time, playing, dirty, saving, lastSavedAt, select, selectMany, toggleSelect, setTime, updateScene, updateLayer, addLayer, removeLayer, removeLayers, duplicate, group, ungroup, reorder, moveTo, copy, paste, setGuides, reorderLayer, fitDuration, undo, redo, canUndo, canRedo, save, replaceScene])
 }
 
 export function newLayerId(scene: Scene): string {

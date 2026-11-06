@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Scene, SceneAudio, SceneLayer, SceneSubtitle } from '../shared/scene'
-import { layerKind } from '../shared/scene'
+import { applyAutoDuration, contentEnd, extendDurationTo, layerKind } from '../shared/scene'
 import { ancestorsOf, findLayer, flatten, pathKey } from '../shared/layers'
 import { useEditor } from '../state/editor'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -106,6 +106,12 @@ export function Timeline() {
   const [laneSel, setLaneSel] = useState<LaneSel | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; row: Row } | null>(null)
   const [dropAt, setDropAt] = useState<{ key: string; time: number } | null>(null)
+  /** 时间轴高度可拖，折叠后只留播放控制条（剪映同款） */
+  const [dockH, setDockH] = useState(() => {
+    const saved = Number(localStorage.getItem('gewu.timelineH'))
+    return Number.isFinite(saved) && saved > 0 ? saved : 300
+  })
+  const [dockCollapsed, setDockCollapsed] = useState(() => localStorage.getItem('gewu.timelineCollapsed') === '1')
 
   const timeRef = useRef(time)
   timeRef.current = time
@@ -313,7 +319,7 @@ export function Timeline() {
         const d = Math.abs(t - raw) * px
         if (d < bestD) { bestD = d; best = t }
       }
-      return Number(clamp(best, 0, dur).toFixed(2))
+      return Number(clamp(best, 0, 1800).toFixed(2))
     }
 
     const move = (e: MouseEvent) => {
@@ -322,36 +328,44 @@ export function Timeline() {
       let en = origEnd
       if (mode === 'move') {
         const len = origEnd - origStart
-        s = snap(clamp(origStart + dt, 0, Math.max(0, dur - len)))
+        s = snap(clamp(origStart + dt, 0, Math.max(0, 1800 - len)))
         en = Number((s + len).toFixed(2))
       } else if (mode === 'l') {
         s = snap(clamp(origStart + dt, 0, origEnd - 0.2))
       } else {
-        en = snap(clamp(origEnd + dt, origStart + 0.2, dur))
+        // 右端可以拖出当前时长（剪映式：松手后时间轴自动变长）
+        en = snap(clamp(origEnd + dt, origStart + 0.2, 1800))
       }
+      // 音频只移动起点，但结束时刻要跟着走，松手时才能正确延长时长
+      if (row.kind === 'audio') en = Number((s + (origEnd - origStart)).toFixed(2))
       if (row.kind === 'layer') {
-        editor.updateLayer(row.id, { start: s, end: en }, { label: '调整图层时间', mergeMs: 600 })
+        editor.updateLayer(row.id, { start: s, end: en }, { label: '调整图层时间', mergeMs: 600, transient: true })
         if (groupChildren) {
           const ds = s - origStart
           for (const k of groupChildren) {
-            editor.updateLayer(k.id, { start: Number((k.start + ds).toFixed(2)), end: Number((k.end + ds).toFixed(2)) }, { label: '调整图层时间', mergeMs: 600 })
+            editor.updateLayer(k.id, { start: Number((k.start + ds).toFixed(2)), end: Number((k.end + ds).toFixed(2)) }, { label: '调整图层时间', mergeMs: 600, transient: true })
           }
         }
       } else if (row.kind === 'audio') {
         editor.updateScene(sc => ({
           ...sc,
           audio: (sc.audio ?? []).map(a => (a.id === row.id ? { ...a, start: s } : a))
-        }), { label: '移动音频', mergeMs: 600 })
+        }), { label: '移动音频', mergeMs: 600, transient: true })
       } else {
         editor.updateScene(sc => ({
           ...sc,
           subtitles: (sc.subtitles ?? []).map(x => (x.id === row.id ? { ...x, start: s, end: en } : x))
-        }), { label: '调整字幕时间', mergeMs: 600 })
+        }), { label: '调整字幕时间', mergeMs: 600, transient: true })
       }
       // 拖动时间气泡：显示当前起止
       setDrag(prev => (prev && (prev.curStart !== s || prev.curEnd !== en) ? { ...prev, curStart: s, curEnd: en } : prev))
     }
-    const up = () => setDrag(null)
+    const up = () => {
+      // 松手才改时长，避免拖动过程中时间轴比例跳变
+      const end = drag.curEnd
+      editor.updateScene(sc => extendDurationTo(applyAutoDuration(sc), end), { label: '调整时长' })
+      setDrag(null)
+    }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
     return () => {
@@ -481,8 +495,47 @@ export function Timeline() {
     setZoom(clamp(value, ZOOM_MIN, ZOOM_MAX))
   }
 
+  /** 拖时间轴顶边改高度；双击复位 */
+  function startDockResize(e: React.MouseEvent) {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = dockH
+    const move = (ev: MouseEvent) => {
+      const next = clamp(startH + (startY - ev.clientY), 120, Math.max(200, window.innerHeight * 0.72))
+      setDockH(Math.round(next))
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      setDockH(h => {
+        localStorage.setItem('gewu.timelineH', String(h))
+        return h
+      })
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+
+  function toggleDock() {
+    setDockCollapsed(v => {
+      localStorage.setItem('gewu.timelineCollapsed', v ? '0' : '1')
+      return !v
+    })
+  }
+
+  const autoDuration = scene.canvas.autoDuration === true
+  const needed = contentEnd(scene)
+
   return (
-    <div className="timeline">
+    <div className={`timeline ${dockCollapsed ? 'collapsed' : ''}`} style={dockCollapsed ? undefined : { height: dockH }}>
+      {!dockCollapsed && (
+        <div
+          className="tl-resize"
+          onMouseDown={startDockResize}
+          onDoubleClick={() => { setDockH(300); localStorage.setItem('gewu.timelineH', '300') }}
+          title="拖动调整时间轴高度 · 双击复位"
+        />
+      )}
       <div className="tl-transport">
         <button className="icon-btn" title="回到开头" onClick={() => editor.setTime(0)}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h2v16H6zM20 4v16L9 12z" /></svg>
@@ -511,7 +564,7 @@ export function Timeline() {
           <span className="badge">{rows.length} 轨</span>
         </div>
         <div className="spacer" />
-        <label className="tl-dur">
+        <label className="tl-dur" title={autoDuration ? `时长自动跟随素材（内容结束于 ${needed.toFixed(1)}s）` : '手动时长；打开「自动」后跟随素材'}>
           时长
           <input
             className="input tl-dur-input"
@@ -520,18 +573,45 @@ export function Timeline() {
             max={1800}
             step={0.5}
             value={duration}
+            disabled={autoDuration}
             onChange={e => {
               const v = clamp(Number(e.target.value) || 1, 1, 1800)
-              editor.updateScene(s => ({ ...s, canvas: { ...s.canvas, duration: v } }), { label: '改时长' })
+              editor.updateScene(s => ({ ...s, canvas: { ...s.canvas, duration: v, autoDuration: false } }), { label: '改时长', noExtend: true })
             }}
           />
           s
         </label>
+        <button
+          className={`tl-auto ${autoDuration ? 'on' : ''}`}
+          onClick={() => editor.updateScene(s => applyAutoDuration({
+            ...s,
+            canvas: { ...s.canvas, autoDuration: !autoDuration }
+          }), { label: '时长跟随素材' })}
+          title={autoDuration ? '已开启：拖长/删短素材，时长自动跟着变' : '开启后，时长自动等于最晚结束的图层/音轨/字幕'}
+        >
+          自动
+        </button>
+        <button
+          className="tl-auto"
+          onClick={() => editor.fitDuration()}
+          title={`把时长对齐到素材结束（${needed.toFixed(1)}s）`}
+        >
+          适配
+        </button>
         <div className="tl-zoom">
           <button className="icon-btn" title="缩小" onClick={() => setZoomWith(zoom / 1.5)}>−</button>
           <span className="tiny mono">{Math.round(zoom * 100)}%</span>
           <button className="icon-btn" title="放大" onClick={() => setZoomWith(zoom * 1.5)}>＋</button>
         </div>
+        <button
+          className="icon-btn tl-collapse"
+          onClick={toggleDock}
+          title={dockCollapsed ? '展开时间轴' : '收起时间轴'}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            {dockCollapsed ? <path d="M6 15l6-6 6 6" /> : <path d="M6 9l6 6 6-6" />}
+          </svg>
+        </button>
       </div>
 
       <div className="tl-scroll" ref={scrollRef}>

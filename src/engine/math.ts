@@ -13,8 +13,8 @@ type Node =
   | { k: 'sup'; child: Node[] }
   | { k: 'sub'; child: Node[] }
   | { k: 'frac'; num: Node[]; den: Node[] }
-  | { k: 'sqrt'; child: Node[] }
-  | { k: 'accent'; kind: 'vec' | 'hat' | 'bar' | 'dot'; child: Node[] }
+  | { k: 'sqrt'; child: Node[]; index?: Node[] }
+  | { k: 'accent'; kind: 'vec' | 'hat' | 'bar' | 'dot' | 'overline' | 'underline' | 'tilde' | 'ddot'; child: Node[] }
   | { k: 'group'; child: Node[] }
 
 const GREEK: Record<string, string> = {
@@ -33,6 +33,8 @@ const SYMBOLS: Record<string, string> = {
   prod: '∏', angle: '∠', perp: '⊥', parallel: '∥', degree: '°', prime: '′',
   in: '∈', notin: '∉', subset: '⊂', cup: '∪', cap: '∩', forall: '∀', exists: '∃',
   ldots: '…', cdots: '⋯', hbar: 'ℏ', ell: 'ℓ', Re: 'ℜ', Im: 'ℑ', therefore: '∴',
+  because: '∵', iint: '∬', iiint: '∭', Leftrightarrow: '⇔', iff: '⇔',
+  longrightarrow: '⟶', Longrightarrow: '⟹', mapsto: '↦', subseteq: '⊆', supseteq: '⊇',
   langle: '⟨', rangle: '⟩', lvert: '|', rvert: '|', vert: '|', Vert: '‖',
   setminus: '∖', ast: '∗', star: '⋆', bullet: '•', circ: '∘'
 }
@@ -107,13 +109,44 @@ function parse(tokens: Token[]): Node[] {
         continue
       }
       if (name === 'sqrt') {
+        // \sqrt[3]{x}：可选根指数
+        let index: Node[] | undefined
+        if (tokens[i + 1]?.t === 'ch' && tokens[i + 1].v === '[') {
+          i++
+          const idxTokens: Token[] = []
+          while (i + 1 < tokens.length && !(tokens[i + 1].t === 'ch' && tokens[i + 1].v === ']')) idxTokens.push(tokens[++i])
+          if (tokens[i + 1]?.t === 'ch' && tokens[i + 1].v === ']') i++
+          index = parse(idxTokens)
+        }
         const a = tokens[++i]
-        nodes.push({ k: 'sqrt', child: a?.t === 'group' ? parse(a.child ?? []) : a ? parse([a]) : [] })
+        nodes.push({
+          k: 'sqrt',
+          child: a?.t === 'group' ? parse(a.child ?? []) : a ? parse([a]) : [],
+          ...(index ? { index } : {})
+        })
         continue
       }
-      if (name === 'vec' || name === 'hat' || name === 'bar' || name === 'dot') {
+      if (name === 'vec' || name === 'hat' || name === 'bar' || name === 'dot' ||
+          name === 'overline' || name === 'underline' || name === 'tilde' || name === 'ddot') {
         const a = tokens[++i]
-        nodes.push({ k: 'accent', kind: name, child: a?.t === 'group' ? parse(a.child ?? []) : a ? parse([a]) : [] })
+        nodes.push({ k: 'accent', kind: name as Extract<Node, { k: 'accent' }>['kind'], child: a?.t === 'group' ? parse(a.child ?? []) : a ? parse([a]) : [] })
+        continue
+      }
+      if (name === 'mathbb') {
+        const a = tokens[++i]
+        const raw = a?.t === 'group' ? (a.child ?? []).map(x => x.v || (x.child ?? []).map(y => y.v).join('')).join('') : ''
+        const sets: Record<string, string> = { R: 'ℝ', N: 'ℕ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ', P: 'ℙ' }
+        nodes.push({ k: 'txt', text: raw.split('').map(ch => sets[ch] ?? ch).join(''), roman: true })
+        continue
+      }
+      if (name === 'color' || name === 'tag' || name === 'label') {
+        // 不支持颜色/编号，但至少不要把命令名画出来
+        tokens[++i]
+        continue
+      }
+      if (name === '\\') {
+        // 矩阵/多行的换行：当前是单行排版，用空格代替，避免画出反斜杠
+        nodes.push({ k: 'txt', text: '  ', roman: true })
         continue
       }
       if (name === 'text' || name === 'mathrm' || name === 'operatorname') {
@@ -193,14 +226,15 @@ function measure(ctx: Ctx2D, nodes: Node[], st: MathStyle): Metrics {
       desc = Math.max(desc, b.desc + st.size * 0.34)
     } else if (n.k === 'sqrt') {
       const a = measure(ctx, n.child, st)
-      w += a.w + st.size * 0.5
-      asc = Math.max(asc, a.asc + st.size * 0.08)
+      const idx = n.index ? measure(ctx, n.index, { ...st, size: st.size * 0.5 }) : null
+      w += a.w + st.size * 0.5 + (idx ? idx.w * 0.8 : 0)
+      asc = Math.max(asc, a.asc + st.size * 0.08, idx ? idx.asc + st.size * 0.42 : 0)
       desc = Math.max(desc, a.desc)
     } else if (n.k === 'accent') {
       const a = measure(ctx, n.child, st)
       w += a.w
-      asc = Math.max(asc, a.asc + st.size * 0.16)
-      desc = Math.max(desc, a.desc)
+      if (n.kind === 'underline') desc = Math.max(desc, a.desc + st.size * 0.2)
+      else asc = Math.max(asc, a.asc + st.size * 0.16)
     }
   }
   return { w, asc: asc || st.size * 0.72, desc: desc || st.size * 0.22, axis }
@@ -254,20 +288,24 @@ function drawNodes(ctx: Ctx2D, nodes: Node[], x: number, y: number, st: MathStyl
       cx += w
     } else if (n.k === 'sqrt') {
       const a = measure(ctx, n.child, st)
+      const idx = n.index ? measure(ctx, n.index, { ...st, size: st.size * 0.5 }) : null
+      const shift = idx ? idx.w * 0.8 + st.size * 0.02 : 0
+      if (n.index) drawNodes(ctx, n.index, cx, y - a.asc - st.size * 0.02, { ...st, size: st.size * 0.5 })
+      const x0 = cx + shift
       const pad = st.size * 0.14
       const top = y - a.asc - st.size * 0.06
       const bottom = y + a.desc * 0.6
       ctx.strokeStyle = st.color
       ctx.lineWidth = Math.max(1, st.size * 0.05)
       ctx.beginPath()
-      ctx.moveTo(cx + st.size * 0.06, y - a.asc * 0.35)
-      ctx.lineTo(cx + st.size * 0.2, y - a.asc * 0.1)
-      ctx.lineTo(cx + st.size * 0.34, bottom)
-      ctx.lineTo(cx + st.size * 0.52, top)
-      ctx.lineTo(cx + st.size * 0.52 + a.w + pad, top)
+      ctx.moveTo(x0 + st.size * 0.06, y - a.asc * 0.35)
+      ctx.lineTo(x0 + st.size * 0.2, y - a.asc * 0.1)
+      ctx.lineTo(x0 + st.size * 0.34, bottom)
+      ctx.lineTo(x0 + st.size * 0.52, top)
+      ctx.lineTo(x0 + st.size * 0.52 + a.w + pad, top)
       ctx.stroke()
-      drawNodes(ctx, n.child, cx + st.size * 0.56, y, st)
-      cx += st.size * 0.56 + a.w + pad
+      drawNodes(ctx, n.child, x0 + st.size * 0.56, y, st)
+      cx = x0 + st.size * 0.56 + a.w + pad
     } else if (n.k === 'accent') {
       const a = measure(ctx, n.child, st)
       const inner = drawNodes(ctx, n.child, cx, y, st)
@@ -286,10 +324,25 @@ function drawNodes(ctx: Ctx2D, nodes: Node[], x: number, y: number, st: MathStyl
         ctx.moveTo(cx + w * 0.88, topY + st.size * 0.02)
         ctx.lineTo(cx + w * 0.76, topY + st.size * 0.08)
         ctx.stroke()
-      } else if (n.kind === 'bar') {
+      } else if (n.kind === 'bar' || n.kind === 'overline') {
         ctx.beginPath()
         ctx.moveTo(cx + st.size * 0.04, topY + st.size * 0.04)
         ctx.lineTo(inner - st.size * 0.04, topY + st.size * 0.04)
+        ctx.stroke()
+      } else if (n.kind === 'underline') {
+        ctx.beginPath()
+        ctx.moveTo(cx + st.size * 0.04, y + a.desc + st.size * 0.1)
+        ctx.lineTo(inner - st.size * 0.04, y + a.desc + st.size * 0.1)
+        ctx.stroke()
+      } else if (n.kind === 'tilde') {
+        const w = inner - cx
+        ctx.beginPath()
+        for (let k = 0; k <= 12; k++) {
+          const px = cx + w * 0.12 + (w * 0.76 * k) / 12
+          const py = topY + st.size * 0.02 + Math.sin((k / 12) * Math.PI * 2) * st.size * 0.035
+          if (k === 0) ctx.moveTo(px, py)
+          else ctx.lineTo(px, py)
+        }
         ctx.stroke()
       } else if (n.kind === 'hat') {
         ctx.beginPath()
@@ -297,6 +350,14 @@ function drawNodes(ctx: Ctx2D, nodes: Node[], x: number, y: number, st: MathStyl
         ctx.lineTo((cx + inner) / 2, topY - st.size * 0.02)
         ctx.lineTo(inner - st.size * 0.1, topY + st.size * 0.1)
         ctx.stroke()
+      } else if (n.kind === 'ddot') {
+        ctx.fillStyle = st.color
+        ctx.beginPath()
+        ctx.arc((cx + inner) / 2 - st.size * 0.08, topY + st.size * 0.02, st.size * 0.04, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.beginPath()
+        ctx.arc((cx + inner) / 2 + st.size * 0.08, topY + st.size * 0.02, st.size * 0.04, 0, Math.PI * 2)
+        ctx.fill()
       } else {
         ctx.beginPath()
         ctx.arc((cx + inner) / 2, topY + st.size * 0.02, st.size * 0.045, 0, Math.PI * 2)

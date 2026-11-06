@@ -58,6 +58,45 @@ function sceneTurn(toolResults) {
   return null
 }
 
+/** batch 模式：一次 scene_batch 完成多步修改，验证批量工具与进出场字段 */
+function batchTurn(toolResults) {
+  if (toolResults === 0) {
+    return {
+      name: 'scene_batch',
+      args: {
+        ops: [
+          { op: 'set', id: 'title', patch: { enter: { kind: 'fade', dur: 0.5 }, name: '标题（批量改过）' } },
+          {
+            op: 'add',
+            layer: {
+              id: 'batch-note', name: '批量新增', kind: 'text',
+              x: 120, y: 820, w: 760, h: 90,
+              text: { content: 'scene_batch OK', size: 40, color: '#4fc3d9' },
+              start: 0, end: 5,
+              enter: { kind: 'zoom-in', dur: 0.4 }
+            }
+          },
+          { op: 'canvas', canvas: { autoDuration: true } }
+        ]
+      }
+    }
+  }
+  if (toolResults === 1) return { name: 'check_scene', args: { samples: 3 } }
+  return null
+}
+
+/** sfx 模式：验证音效工具会写 wav + 挂音轨 */
+function sfxTurn(toolResults) {
+  if (toolResults === 0) return { name: 'sfx_add', args: { preset: 'ding', at: 1.5, volume: 0.7 } }
+  return null
+}
+
+/** knowledge 模式：验证 agent 能检索本地知识库 */
+function knowledgeTurn(toolResults) {
+  if (toolResults === 0) return { name: 'knowledge_search', args: { query: '马吕斯定律', topic: 'physics', limit: 1 } }
+  return null
+}
+
 /**
  * tts 模式：先调 tts_speak 合成一句旁白，拿到 path/durationSec 后
  * 再把它们写进 scene.audio —— 验证「agent 自己配音」这条链路。
@@ -323,7 +362,13 @@ const server = createServer(async (req, res) => {
     : MODE === 'kf'
       ? keyframeTurn(toolMsgs.length)      : MODE === 'tts'
         ? ttsTurn(toolMsgs.length, toolMsgs)
-        : (MODE !== 'text' && toolMsgs.length === 0 ? (CALLS[MODE] ?? CALLS.inspect) : null)
+        : MODE === 'batch'
+          ? batchTurn(toolMsgs.length)
+          : MODE === 'sfx'
+            ? sfxTurn(toolMsgs.length)
+            : MODE === 'knowledge'
+              ? knowledgeTurn(toolMsgs.length)
+              : (MODE !== 'text' && toolMsgs.length === 0 ? (CALLS[MODE] ?? CALLS.inspect) : null)
   if (nextCall) {
     console.log('[mock] emitting tool_call %s (round %d)', nextCall.name, toolMsgs.length + 1)
     sse(res, { ...base, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ExportSettings } from '../shared/ipc'
+import type { ExportFormat, ExportSettings } from '../shared/ipc'
 import type { Scene } from '../shared/scene'
 
 export interface ExportStartInput {
@@ -7,6 +7,11 @@ export interface ExportStartInput {
   name: string
   from?: number
   to?: number
+  width?: number
+  height?: number
+  fps?: number
+  bitrate?: number
+  quality?: 'high' | 'balanced' | 'small'
   reveal: boolean
   overwrite: boolean
 }
@@ -37,6 +42,37 @@ function fmtDuration(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
+const RESOLUTIONS: Record<ExportFormat['resolution'], { label: string; w?: number; h?: number }> = {
+  source: { label: '跟随场景' },
+  '4k': { label: '4K · 3840×2160', w: 3840, h: 2160 },
+  '2k': { label: '2K · 2560×1440', w: 2560, h: 1440 },
+  '1080p': { label: '1080p · 1920×1080', w: 1920, h: 1080 },
+  '720p': { label: '720p · 1280×720', w: 1280, h: 720 },
+  '480p': { label: '480p · 854×480', w: 854, h: 480 }
+}
+const DEFAULT_FORMAT: ExportFormat = { resolution: 'source', fps: 30, quality: 'balanced' }
+
+function loadFormat(fps: number): ExportFormat {
+  try {
+    const raw = localStorage.getItem('gewu.exportFormat')
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<ExportFormat>
+      const resolution = parsed.resolution && parsed.resolution in RESOLUTIONS ? parsed.resolution : 'source'
+      const nextFps = [24, 25, 30, 50, 60, 120, 150].includes(Number(parsed.fps)) ? Number(parsed.fps) : fps
+      const quality = parsed.quality === 'high' || parsed.quality === 'small' || parsed.quality === 'custom'
+        ? parsed.quality
+        : 'balanced'
+      return {
+        resolution,
+        fps: nextFps,
+        quality,
+        bitrateMbps: Number(parsed.bitrateMbps) > 0 ? Number(parsed.bitrateMbps) : undefined
+      }
+    }
+  } catch { /* 坏数据就当没存过 */ }
+  return { ...DEFAULT_FORMAT, fps }
+}
+
 /**
  * 导出对话框。
  * 和剪映/PR 一样：位置、文件名、范围都在这里一次定好，不用先点系统保存框再回来。
@@ -52,9 +88,17 @@ export function ExportDialog({ open, scene, draftName, onClose, onStart }: Props
   const [reveal, setReveal] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [fmt, setFmt] = useState<ExportFormat>(() => loadFormat(scene.canvas.fps))
 
   const duration = scene.canvas.duration
   const title = (scene.meta.title || draftName || 'physics-video').trim()
+  const outW = RESOLUTIONS[fmt.resolution].w ?? scene.canvas.width
+  const outH = RESOLUTIONS[fmt.resolution].h ?? scene.canvas.height
+  const estBitrate = Math.min(120_000_000, fmt.quality === 'custom'
+    ? Math.max(0.3, Number(fmt.bitrateMbps) || 8) * 1_000_000
+    : Math.round(outW * outH * fmt.fps * (fmt.quality === 'high' ? 0.2 : fmt.quality === 'small' ? 0.06 : 0.12)))
+  const estMB = (estBitrate * duration) / 8 / 1_000_000
+  const heavy = outW * outH * fmt.fps > 1920 * 1080 * 60
 
   useEffect(() => {
     if (!open) return
@@ -63,6 +107,7 @@ export function ExportDialog({ open, scene, draftName, onClose, onStart }: Props
     setScope('all')
     setFrom(0)
     setTo(duration)
+    setFmt(loadFormat(scene.canvas.fps))
     void (async () => {
       try {
         const s = await window.gewu.getExportSettings()
@@ -126,10 +171,17 @@ export function ExportDialog({ open, scene, draftName, onClose, onStart }: Props
       setError('结束时间要比开始时间晚')
       return
     }
+    localStorage.setItem('gewu.exportFormat', JSON.stringify(fmt))
     onStart({
       dir: dir.trim(),
       name: name.trim(),
       ...range,
+      width: outW,
+      height: outH,
+      fps: fmt.fps,
+      ...(fmt.quality === 'custom'
+        ? { bitrate: Math.round(estBitrate) }
+        : { quality: fmt.quality }),
       reveal,
       overwrite: Boolean(settings?.forcedPath)
     })
@@ -210,6 +262,60 @@ export function ExportDialog({ open, scene, draftName, onClose, onStart }: Props
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="xdlg-field">
+            <div className="xdlg-label-row">
+              <label>画质与帧率</label>
+              <span className="tiny muted">输出 {outW}×{outH} · {fmt.fps}fps · 约 {estMB.toFixed(1)}MB</span>
+            </div>
+            <div className="xdlg-format">
+              <label>
+                <span>清晰度</span>
+                <select className="input" value={fmt.resolution} onChange={e => setFmt(f => ({ ...f, resolution: e.target.value as ExportFormat['resolution'] }))}>
+                  {Object.entries(RESOLUTIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>帧率</span>
+                <select className="input" value={fmt.fps} onChange={e => setFmt(f => ({ ...f, fps: Number(e.target.value) }))}>
+                  {[24, 25, 30, 50, 60, 120, 150].map(v => <option key={v} value={v}>{v} fps</option>)}
+                </select>
+              </label>
+              <label>
+                <span>码率</span>
+                <select className="input" value={fmt.quality} onChange={e => setFmt(f => ({ ...f, quality: e.target.value as ExportFormat['quality'] }))}>
+                  <option value="high">高（文件大）</option>
+                  <option value="balanced">均衡</option>
+                  <option value="small">小（省空间）</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </label>
+              {fmt.quality === 'custom' && (
+                <label>
+                  <span>Mbps</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0.3}
+                    max={120}
+                    step={0.5}
+                    value={fmt.bitrateMbps ?? 8}
+                    onChange={e => setFmt(f => ({ ...f, bitrateMbps: Number(e.target.value) || 8 }))}
+                  />
+                </label>
+              )}
+            </div>
+            <div className="ref-hint">
+              清晰度只影响输出文件；场景仍按 1920×1080 设计坐标渲染，AI 写的坐标不会漂移。
+              码率越高画面越干净，但文件也越大；文字多的科普片建议用「均衡」以上。
+            </div>
+            {heavy && (
+              <div className="xdlg-warn">
+                4K / 150fps 对显卡和编码器压力很大：4K 建议 ≤60fps，150fps 建议 ≤1080p。
+                编码器不支持这个组合时会直接报错；可以缩短导出片段，或降一档再试。
+              </div>
+            )}
           </div>
 
           <label className="xdlg-check">

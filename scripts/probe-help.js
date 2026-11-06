@@ -79,7 +79,7 @@
       const dlg = q('.hdlg')
       check('点「使用说明」打开弹窗', !!dlg)
       const tabs = qa('.hdlg .modal-tabs button').map(b => b.textContent.trim())
-      check('说明有 6 个标签', tabs.length === 6, tabs)
+      check('说明有 7 个标签', tabs.length === 7, tabs)
       const body1 = q('.hdlg .help-body')?.textContent ?? ''
       check('默认停在「快速上手」，讲清五步', body1.includes('五步做出一段视频') && body1.includes('Ctrl') && body1.includes('导出'), body1.slice(0, 40))
 
@@ -121,7 +121,7 @@
         if (!inside || overX > 1 || heads === 0) bad.push({ tab: t.textContent.trim(), inside, overX, heads })
         out['tab_' + t.textContent.trim()] = { inside, overX, heads, rows, bodyH: body.clientHeight, scrollH: body.scrollHeight }
       }
-      check('6 个标签逐页：不出视口、不横向溢出、每页都有小标题', bad.length === 0, bad)
+      check('7 个标签逐页：不出视口、不横向溢出、每页都有小标题', bad.length === 0, bad)
 
       // 草稿页仍然保留「草稿是怎么存的」
       const draftTab = qa('.hdlg .modal-tabs button').find(b => b.textContent.trim() === '草稿与导出')

@@ -10,6 +10,18 @@ interface Props { layer: SceneLayer }
 
 type Tab = 'props' | 'code'
 
+const TRANSITION_OPTIONS: { value: string; label: string }[] = [
+  { value: 'fade', label: '渐隐渐显' },
+  { value: 'slide-left', label: '从左滑入' },
+  { value: 'slide-right', label: '从右滑入' },
+  { value: 'slide-up', label: '从下浮入' },
+  { value: 'slide-down', label: '从上落下' },
+  { value: 'zoom-in', label: '放大进入' },
+  { value: 'zoom-out', label: '缩小进入' },
+  { value: 'wipe-left', label: '从左擦除' },
+  { value: 'wipe-right', label: '从右擦除' }
+]
+
 export function Inspector({ layer }: Props) {
   const editor = useEditor()
   const kind = layerKind(layer)
@@ -300,6 +312,64 @@ export function Inspector({ layer }: Props) {
                 在组合「{parent.name}」里（{(parent.start ?? 0).toFixed(2)}–{(parent.end ?? duration).toFixed(2)}s），超出这段的画面不显示。
               </div>
             )}
+          </div>
+
+          <div className="insp-section">
+            <div className="insp-section-title">进出场动画</div>
+            <div className="insp-row">
+              <div className="field">
+                <label>进场</label>
+                <select
+                  className="select"
+                  value={layer.enter?.kind ?? 'none'}
+                  onChange={e => {
+                    const v = e.target.value
+                    patch({ enter: v === 'none' ? undefined : { ...(layer.enter ?? {}), kind: v as NonNullable<SceneLayer['enter']>['kind'] } }, '改进场动画')
+                  }}
+                >
+                  <option value="none">硬切（无）</option>
+                  {TRANSITION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label>时长（秒）</label>
+                <input
+                  className="input" type="number" min={0.05} max={20} step={0.05}
+                  value={layer.enter?.dur ?? 0.5}
+                  disabled={!layer.enter}
+                  onChange={e => patch({ enter: { ...(layer.enter ?? {}), dur: Number(e.target.value) || 0.5 } }, '改进场时长')}
+                />
+              </div>
+            </div>
+            <div className="insp-row">
+              <div className="field">
+                <label>出场</label>
+                <select
+                  className="select"
+                  value={layer.exit?.kind ?? 'none'}
+                  onChange={e => {
+                    const v = e.target.value
+                    patch({ exit: v === 'none' ? undefined : { ...(layer.exit ?? {}), kind: v as NonNullable<SceneLayer['exit']>['kind'] } }, '改出场动画')
+                  }}
+                >
+                  <option value="none">硬切（无）</option>
+                  {TRANSITION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label>时长（秒）</label>
+                <input
+                  className="input" type="number" min={0.05} max={20} step={0.05}
+                  value={layer.exit?.dur ?? 0.5}
+                  disabled={!layer.exit}
+                  onChange={e => patch({ exit: { ...(layer.exit ?? {}), dur: Number(e.target.value) || 0.5 } }, '改出场时长')}
+                />
+              </div>
+            </div>
+            <div className="insp-hint">
+              渐隐/滑入/缩放/擦除都由时间 t 算出，导出逐帧可复现。出场时间相对元素的结束时刻。
+              组合上的动画会带着整个组合一起动。
+            </div>
           </div>
 
           <div className="insp-section">

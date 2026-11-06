@@ -2,7 +2,7 @@ import { readFile, mkdir, readdir, stat } from 'node:fs/promises'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { join, relative, extname } from 'node:path'
 import { atomicWrite } from './atomic'
-import { emptyScene, type Scene, type SceneLayer } from '@shared/scene'
+import { applyAutoDuration, emptyScene, type Scene, type SceneLayer, type LayerTransition } from '@shared/scene'
 import { demoScene } from '@shared/demo'
 
 const SCENE_FILE = 'scene.json'
@@ -15,6 +15,10 @@ export async function writeSceneFile(path: string, scene: Scene): Promise<void> 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i
 const KINDS = new Set(['group', 'text', 'image', 'shape', 'code'])
 const SHAPES = new Set(['rect', 'ellipse', 'line', 'arrow', 'triangle'])
+const TRANSITIONS = new Set([
+  'fade', 'slide-left', 'slide-right', 'slide-up', 'slide-down',
+  'zoom-in', 'zoom-out', 'wipe-left', 'wipe-right'
+])
 const MAX_DEPTH = 4
 const MAX_LAYERS = 300
 
@@ -28,13 +32,15 @@ export function normalizeScene(input: unknown): Scene {
   canvas.height = clampInt(canvas.height, 180, 4096, 1080)
   canvas.fps = clampInt(canvas.fps, 12, 60, 30)
   canvas.duration = Math.max(0.5, Math.min(1800, Number(canvas.duration) || 8))
+  if (raw.canvas?.autoDuration === true) canvas.autoDuration = true
+  else delete (canvas as { autoDuration?: boolean }).autoDuration
 
   const theme = { ...fallback.theme, ...(raw.theme ?? {}) }
   const seen = new Set<string>()
   const budget = { left: MAX_LAYERS }
   const layers = normalizeLayers(Array.isArray(raw.layers) ? raw.layers : [], seen, budget, 0)
 
-  return {
+  const scene: Scene = {
     version: 1,
     meta: {
       title: typeof raw.meta?.title === 'string' ? raw.meta.title.slice(0, 120) : fallback.meta.title,
@@ -47,15 +53,21 @@ export function normalizeScene(input: unknown): Scene {
     audio: Array.isArray(raw.audio)
       ? raw.audio
           .filter(a => a && typeof a.src === 'string')
-          .slice(0, 20)
-          .map(a => ({
-            id: String(a.id ?? Math.random().toString(36).slice(2, 8)),
-            name: String(a.name ?? a.src.split('/').pop() ?? '音频').slice(0, 120),
-            src: a.src,
-            start: Math.max(0, Number(a.start) || 0),
-            dur: a.dur === undefined ? undefined : Math.max(0, Number(a.dur) || 0),
-            volume: a.volume === undefined ? 1 : Math.max(0, Math.min(2, Number(a.volume) || 0))
-          }))
+          .slice(0, 40)
+          .map(a => {
+            const kind = a.kind === 'voice' || a.kind === 'sfx' || a.kind === 'music' ? a.kind : undefined
+            return {
+              id: String(a.id ?? Math.random().toString(36).slice(2, 8)),
+              name: String(a.name ?? a.src.split('/').pop() ?? '音频').slice(0, 120),
+              src: a.src,
+              start: Math.max(0, Number(a.start) || 0),
+              dur: a.dur === undefined ? undefined : Math.max(0, Number(a.dur) || 0),
+              volume: a.volume === undefined ? 1 : Math.max(0, Math.min(2, Number(a.volume) || 0)),
+              ...(kind ? { kind } : {}),
+              fadeIn: a.fadeIn === undefined ? undefined : Math.max(0, Math.min(10, Number(a.fadeIn) || 0)),
+              fadeOut: a.fadeOut === undefined ? undefined : Math.max(0, Math.min(10, Number(a.fadeOut) || 0))
+            }
+          })
       : [],
     subtitles: Array.isArray(raw.subtitles)
       ? raw.subtitles
@@ -65,6 +77,7 @@ export function normalizeScene(input: unknown): Scene {
       : [],
     guides: normalizeGuides(raw.guides)
   }
+  return applyAutoDuration(scene)
 }
 
 /** 参考线：只保留有限数字，最多各 40 条；空的话不写进 scene.json */
@@ -156,9 +169,28 @@ function normalizeLayers(list: unknown[], seen: Set<string>, budget: { left: num
       }
     }
     if (kids.length) normalized.children = kids
+    const enter = normalizeTransition(layer.enter)
+    if (enter) normalized.enter = enter
+    const exit = normalizeTransition(layer.exit)
+    if (exit) normalized.exit = exit
     out.push(normalized)
   })
   return out
+}
+
+/** 进出场动画：类型白名单 + 数值夹紧；不合法就当没写 */
+function normalizeTransition(input: unknown): LayerTransition | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const t = input as LayerTransition
+  const kind = typeof t.kind === 'string' && TRANSITIONS.has(t.kind) ? t.kind : 'fade'
+  const ease = t.ease === 'linear' || t.ease === 'inOutCubic' || t.ease === 'outBack' ? t.ease : 'outCubic'
+  return {
+    kind,
+    dur: clampNum(t.dur, 0.05, 20, 0.5),
+    delay: clampNum(t.delay, 0, 60, 0),
+    ease,
+    distance: clampNum(t.distance, 0, 2000, 80)
+  }
 }
 
 function clampNum(v: unknown, min: number, max: number, dflt: number): number {

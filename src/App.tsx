@@ -6,6 +6,7 @@ import { EditorContext, useEditorState } from './state/editor'
 import { TitleBar } from './components/TitleBar'
 import { LeftPanel } from './components/LeftPanel'
 import { Stage } from './components/Stage'
+import { Timeline } from './components/Timeline'
 import { RightPanel } from './components/RightPanel'
 import { ToolHost } from './components/ToolHost'
 import { SettingsModal } from './components/SettingsModal'
@@ -29,6 +30,15 @@ export default function App() {
   const agentSourceRef = useRef(false)
 
   const editor = useEditorState(scene)
+
+  // 自动化探针用的只读调试入口（桌面端，不对外暴露 DOM；探针脚本靠它验证时长/动画）
+  useEffect(() => {
+    ;(window as unknown as { __gewuDebug?: unknown }).__gewuDebug = {
+      editor,
+      getScene: () => editor.state.scene,
+      getTime: () => editor.state.time
+    }
+  }, [editor])
 
   // 初始化
   useEffect(() => {
@@ -266,10 +276,13 @@ export default function App() {
           onNewSession={() => { setChat([]); void window.gewu.newSession() }}
           onOpenHelp={() => setHelpOpen(true)}
         />
-        <div className="workspace">
-          <LeftPanel onToast={setToast} />
-          <Stage onToast={setToast} exportJob={exportJob} />
-          <RightPanel chat={chat} agent={appState.agent} onOpenSettings={() => setSettingsOpen(true)} onOpenHelp={() => setHelpOpen(true)} onToast={setToast} />
+        <div className="workbench">
+          <div className="wb-top">
+            <LeftPanel onToast={setToast} />
+            <Stage onToast={setToast} exportJob={exportJob} />
+            <RightPanel chat={chat} agent={appState.agent} onOpenSettings={() => setSettingsOpen(true)} onOpenHelp={() => setHelpOpen(true)} onToast={setToast} />
+          </div>
+          <Timeline />
         </div>
         <ToolHost
           onExport={async args => {
@@ -277,7 +290,13 @@ export default function App() {
             const name = String(args.name ?? `${editor.state.scene.meta.title || 'physics-video'}.mp4`)
             try {
               setExportJob({ running: true, frame: 0, total: 0, phase: 'prepare' })
-              const result = await runExport(args.from as number | undefined, args.to as number | undefined)
+              const result = await runExport(args.from as number | undefined, args.to as number | undefined, {
+                fps: args.fps as number | undefined,
+                width: args.width as number | undefined,
+                height: args.height as number | undefined,
+                bitrate: args.bitrate as number | undefined,
+                quality: args.quality as 'high' | 'balanced' | 'small' | undefined
+              })
               const saved = await window.gewu.saveWorkspaceExport(name, result.bytes)
               if (!saved.ok) throw new Error(saved.error ?? '写入失败')
               setToast({ text: `已导出 ${result.frames} 帧 · ${result.seconds.toFixed(1)}s → ${saved.path}`, kind: 'ok' })
@@ -310,16 +329,21 @@ export default function App() {
     </EditorContext.Provider>
   )
 
-  async function runExport(from?: number, to?: number) {
+  async function runExport(from?: number, to?: number, format?: { width?: number; height?: number; fps?: number; bitrate?: number; quality?: 'high' | 'balanced' | 'small' }) {
     const { exportScene } = await import('./engine/export')
     const result = await exportScene({
       scene: editor.state.scene,
       from,
       to,
+      width: format?.width,
+      height: format?.height,
+      fps: format?.fps,
+      bitrate: format?.bitrate,
+      quality: format?.quality,
       onProgress: (frame, total, phase) => setExportJob({ running: true, frame, total, phase })
     })
     setExportJob({ running: false, frame: 0, total: 0, phase: 'done' })
-    return { bytes: result.bytes, frames: result.frames, seconds: result.seconds }
+    return { bytes: result.bytes, frames: result.frames, seconds: result.seconds, width: result.width, height: result.height, fps: result.fps }
   }
 
   /** 用户在导出对话框里定好位置后走这里 */
@@ -327,14 +351,14 @@ export default function App() {
     setExportOpen(false)
     try {
       setExportJob({ running: true, frame: 0, total: 0, phase: 'prepare' })
-      const result = await runExport(input.from, input.to)
+      const result = await runExport(input.from, input.to, input)
       const saved = await window.gewu.saveExportTo(
         { dir: input.dir, name: input.name },
         result.bytes,
         { reveal: input.reveal, overwrite: input.overwrite }
       )
       if (!saved.ok || !saved.path) throw new Error(saved.error ?? '写入失败')
-      setToast({ text: `已导出 ${result.frames} 帧 · ${result.seconds.toFixed(1)}s → ${saved.path}`, kind: 'ok' })
+      setToast({ text: `已导出 ${result.frames} 帧 · ${result.width}×${result.height}@${result.fps} · ${result.seconds.toFixed(1)}s → ${saved.path}`, kind: 'ok' })
     } catch (error) {
       setExportJob(null)
       setToast({ text: `导出失败：${error instanceof Error ? error.message : String(error)}`, kind: 'err' })

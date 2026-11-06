@@ -9,6 +9,8 @@ import { DraftStore } from './draft-store'
 import { cleanupTempFiles } from './atomic'
 import { AgentBridge } from './agent/bridge'
 import { registerIpc } from './ipc'
+import { AssetSearch } from './web-search'
+import { KnowledgeBase } from './knowledge'
 import type { Scene } from '@shared/scene'
 
 let mainWindow: BrowserWindow | null = null
@@ -17,6 +19,8 @@ let store: ConfigStore
 let sceneStore: SceneStore
 let draftStore: DraftStore
 let bridge: AgentBridge
+let assetSearch: AssetSearch
+let knowledge: KnowledgeBase
 
 // --log=<file>：把主进程的 console 落到文件。
 // Windows 上 Electron 是 GUI 子系统程序，PowerShell 的 > / *> 重定向收不到它的 stdout，
@@ -87,6 +91,12 @@ function agentsDoc(): string {
 function resourceFile(name: string): string {
   if (app.isPackaged) return join(process.resourcesPath, name)
   return join(app.getAppPath(), 'resources', name)
+}
+
+/** 知识库目录（物理 / 数学 / 分镜 md） */
+function knowledgeDir(): string {
+  if (app.isPackaged) return join(process.resourcesPath, 'knowledge')
+  return join(app.getAppPath(), 'resources', 'knowledge')
 }
 
 /** 把相对路径拼进基准目录；越界（../ 或绝对路径）返回 null */
@@ -230,6 +240,8 @@ function wireBridge() {
     getWorkspace: () => sceneStore.workspace,
     getScenePath: () => sceneStore.scenePath,
     getDraftName: () => draftStore.activeName,
+    search: assetSearch,
+    knowledge,
     onChat: msg => {
       // 每个草稿各自留一份对话，切回去还能接着聊
       draftStore.recordChat(msg)
@@ -312,16 +324,28 @@ app.whenReady().then(async () => {
     if (url.hostname === 'app') {
       return net.fetch(pathToFileURL(join(__dirname, '../renderer', rel)).toString())
     }
+    if (url.hostname === 'cache') {
+      // 素材检索的缩略图缓存（只读，不允许 ../ 越界）
+      const base = join(userData, 'cache', 'search')
+      const abs = safeJoin(base, rel)
+      if (!abs) return new Response('forbidden', { status: 403 })
+      return serveFile(abs)
+    }
     return new Response('not found', { status: 404 })
   })
 
   await sceneStore.init()
+  assetSearch = new AssetSearch(join(userData, 'cache', 'search'))
+  knowledge = new KnowledgeBase()
+  await knowledge.load(knowledgeDir())
   wireBridge()
   registerIpc({
     store,
     drafts: draftStore,
     getSceneStore: () => sceneStore,
     bridge,
+    search: assetSearch,
+    knowledge,
     getWindow: () => mainWindow,
     switchDraft: activateDraft,
     openDraftWindow: createDraftWindow,

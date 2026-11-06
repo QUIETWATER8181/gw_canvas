@@ -48,13 +48,13 @@
   }))
   const mdrag = async (el, x, y, dx, dy) => {
     el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1 }))
-    await wait(90)
+    await wait(160)
     window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x + dx / 2, clientY: y + dy / 2, buttons: 1 }))
-    await wait(90)
+    await wait(160)
     window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x + dx, clientY: y + dy, buttons: 1 }))
-    await wait(90)
+    await wait(160)
     window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x + dx, clientY: y + dy }))
-    await wait(700)
+    await wait(900)
   }
   const out = {}
   try {

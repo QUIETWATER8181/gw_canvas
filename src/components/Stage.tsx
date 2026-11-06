@@ -6,7 +6,7 @@ import { ancestorsOf, findLayer, flatten, pathKey, updateAt } from '../shared/la
 import { SceneRenderer, blitTo } from '../engine/preview'
 import { renderScene } from '../engine/render'
 import { assetImage } from '../engine/assets'
-import { Timeline, DRAG_MIME, dropAssetAt, readDragAsset } from './Timeline'
+import { DRAG_MIME, dropAssetAt, readDragAsset } from './Timeline'
 import { StageToolbar } from './StageToolbar'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { ALIGN_LABEL, computeAlign, type AlignMode } from './layer-ops'
@@ -853,7 +853,6 @@ export function Stage({ onToast, exportJob }: Props) {
             : '点选画面元素 · 空白处拖框多选 · Shift+拖框「让 AI 重画这块」· 空格拖动平移 · Ctrl+滚轮缩放'}
         </div>
       </div>
-      <Timeline />
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
     </main>

@@ -17,6 +17,7 @@ interface Props {
 function statusOf(state: AppState): { cls: string; text: string } {
   const { phase, detail } = state.agent
   if (phase === 'running') return { cls: 'busy', text: '思考中' }
+  if (phase === 'paused') return { cls: 'busy', text: '已暂停' }
   if (phase === 'starting') return { cls: 'busy', text: '启动中' }
   if (phase === 'error') return { cls: 'err', text: '异常' }
   if (phase === 'ready') return { cls: 'on', text: '就绪' }

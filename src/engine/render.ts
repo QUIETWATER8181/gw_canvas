@@ -6,6 +6,105 @@ import { createThree3D } from './three3d'
 import { assetImage } from './assets'
 import { ease, util } from './ease'
 
+const EASE_FNS = {
+  linear: (x: number) => x,
+  outCubic: (x: number) => 1 - Math.pow(1 - x, 3),
+  inOutCubic: (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2),
+  outBack: (x: number) => {
+    const c1 = 1.70158
+    const c3 = c1 + 1
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2)
+  }
+}
+
+interface TransitionState {
+  alpha: number
+  tx: number
+  ty: number
+  scale: number
+  /** 擦除进度 0..1（1 = 完全显示） */
+  wipe: number
+  wipeFrom: 'left' | 'right'
+}
+
+const NO_TRANSITION: TransitionState = { alpha: 1, tx: 0, ty: 0, scale: 1, wipe: 1, wipeFrom: 'left' }
+
+/**
+ * 计算图层在 t 时刻的进出场状态。
+ * 完全由 t / start / end 决定，导出逐帧可复现。
+ */
+export function transitionAt(layer: SceneLayer, t: number): TransitionState {
+  const enter = layer.enter
+  const exit = layer.exit
+  if (!enter && !exit) return NO_TRANSITION
+  const state: TransitionState = { ...NO_TRANSITION }
+  const start = layer.start ?? 0
+  const end = layer.end ?? Number.POSITIVE_INFINITY
+
+  if (enter) {
+    const dur = Math.max(0.01, enter.dur ?? 0.5)
+    const delay = enter.delay ?? 0
+    const k = clamp01((t - start - delay) / dur)
+    const e = (EASE_FNS[enter.ease ?? 'outCubic'] ?? EASE_FNS.outCubic)(k)
+    applyTransition(state, enter.kind ?? 'fade', e, enter.distance ?? 80, 'enter')
+  }
+  if (exit && Number.isFinite(end)) {
+    const dur = Math.max(0.01, exit.dur ?? 0.5)
+    const delay = exit.delay ?? 0
+    const k = clamp01((end - t - delay) / dur)
+    const e = (EASE_FNS[exit.ease ?? 'outCubic'] ?? EASE_FNS.outCubic)(k)
+    applyTransition(state, exit.kind ?? 'fade', e, exit.distance ?? 80, 'exit')
+  }
+  return state
+}
+
+function applyTransition(
+  state: TransitionState,
+  kind: NonNullable<SceneLayer['enter']>['kind'] & string,
+  e: number,
+  distance: number,
+  phase: 'enter' | 'exit'
+): void {
+  const k = clamp01(e)
+  const away = 1 - k
+  switch (kind) {
+    case 'slide-left':
+      state.tx += phase === 'enter' ? -away * distance : -away * distance
+      state.alpha *= k
+      break
+    case 'slide-right':
+      state.tx += phase === 'enter' ? away * distance : away * distance
+      state.alpha *= k
+      break
+    case 'slide-up':
+      state.ty += phase === 'enter' ? away * distance : -away * distance
+      state.alpha *= k
+      break
+    case 'slide-down':
+      state.ty += phase === 'enter' ? -away * distance : away * distance
+      state.alpha *= k
+      break
+    case 'zoom-in':
+      state.scale *= 0.9 + 0.1 * k
+      state.alpha *= k
+      break
+    case 'zoom-out':
+      state.scale *= 1.1 - 0.1 * k
+      state.alpha *= k
+      break
+    case 'wipe-left':
+      state.wipe = Math.min(state.wipe, k)
+      state.wipeFrom = 'left'
+      break
+    case 'wipe-right':
+      state.wipe = Math.min(state.wipe, k)
+      state.wipeFrom = 'right'
+      break
+    default:
+      state.alpha *= k
+  }
+}
+
 export type LayerDraw = (scope: DrawScope) => void
 
 export interface CompileResult {
@@ -182,10 +281,13 @@ function paintList(layers: SceneLayer[], env: PaintEnv, basePath: string[]): voi
     const paintSelf = isTarget
     const paintKids = (isTarget || isAncestor) && !(isTarget && env.onlySelf)
 
+    const tr = transitionAt(layer, env.t)
+
     env.ctx.save()
-    env.ctx.globalAlpha *= clamp01(layer.opacity ?? 1)
+    env.ctx.globalAlpha *= clamp01((layer.opacity ?? 1) * tr.alpha)
     if (layer.blend && layer.blend !== 'source-over') env.ctx.globalCompositeOperation = layer.blend
     applyTransform(env.ctx, layer)
+    applyTransitionTransform(env.ctx, layer, env, tr)
 
     if (paintSelf) paintContent(layer, env)
 
@@ -225,6 +327,29 @@ function applyTransform(ctx: Ctx2D, layer: SceneLayer): void {
       if (scale !== 1) ctx.scale(scale, scale)
       ctx.translate(-cx, -cy)
     }
+  }
+}
+
+/** 进出场：位移/缩放/擦除都叠加在图层自身变换之后 */
+function applyTransitionTransform(ctx: Ctx2D, layer: SceneLayer, env: PaintEnv, tr: TransitionState): void {
+  if (tr.tx || tr.ty || tr.scale !== 1) {
+    const own = hasOwnBox(layer)
+    const w = own ? Number(layer.w) || 0 : env.W
+    const h = own ? Number(layer.h) || 0 : env.H
+    ctx.translate(w / 2, h / 2)
+    if (tr.scale !== 1) ctx.scale(tr.scale, tr.scale)
+    ctx.translate(-w / 2, -h / 2)
+    if (tr.tx || tr.ty) ctx.translate(tr.tx, tr.ty)
+  }
+  if (tr.wipe < 1) {
+    const own = hasOwnBox(layer)
+    const w = own ? Number(layer.w) || 0 : env.W
+    const h = own ? Number(layer.h) || 0 : env.H
+    const width = Math.max(0, w * tr.wipe)
+    ctx.beginPath()
+    if (tr.wipeFrom === 'right') ctx.rect(w - width, 0, width, h)
+    else ctx.rect(0, 0, width, h)
+    ctx.clip()
   }
 }
 

@@ -59,7 +59,61 @@
 - `children`：组合内的子元素，**坐标相对组合左上角**。组合的 `x/y` 写 `0` 时，子元素就写绝对坐标（最不容易错）
 - `rotation`：旋转角度（度，绕元素中心）；`scale`：缩放倍数（绕元素中心）
 - `blend`：`source-over` | `lighter` | `screen` | `multiply` | `overlay`
+- `enter` / `exit`：进出场动画，见下面「转场与连贯性」。**默认就该给元素加 0.4–0.6s 的 `enter` 渐显**，不要硬切
 - `draw`：函数体源码（不是箭头函数）。只有 `kind:"code"`（或需要动画的 `group`）才用。
+
+## 转场与连贯性（画面质量的关键）
+
+每个元素可以带进出场动画，引擎按时间 `t` 自动算透明度和位移，导出逐帧可复现：
+
+```json
+{ "id": "title", "kind": "text", "x": 120, "y": 80, "w": 900, "h": 120,
+  "text": { "content": "偏振光", "size": 72 },
+  "start": 0, "end": 6,
+  "enter": { "kind": "fade", "dur": 0.6 },
+  "exit": { "kind": "fade", "dur": 0.5 } }
+```
+
+`kind` 可选：`fade`（渐隐，默认）、`slide-left/right/up/down`（滑入滑出）、
+`zoom-in/zoom-out`（缩放）、`wipe-left/wipe-right`（擦除）。
+`dur` 秒（默认 0.5）、`delay` 秒、`ease`（`linear` / `outCubic` / `inOutCubic` / `outBack`）、
+`distance` 像素（slide/wipe 用，默认 80）。`exit` 的时间相对元素 `end`。
+
+**默认节奏**（除非用户另有要求）：
+
+1. 每个元素进场 0.4–0.6s（文字/公式用 `fade`，图形用 `zoom-in` 或 `slide-*`，大块背景用 `wipe-*`）。
+2. 同一组元素错开 0.08–0.15s 进场（标题先、图后、标注最后），比全部同时出现有呼吸感。
+3. 退场比进场快一点（0.3–0.45s）；镜头切换时让旧元素先淡出、新元素再淡入，**不要瞬切**。
+4. 一段动画的结束状态 = 下一段的开始状态：位置、颜色、缩放都接着上一段走，观众才不会「跳戏」。
+   如果 A 段结束时圆在 (1200, 540)、半径 80，B 段开始就从这个状态继续，不要回到原点重画。
+5. 需要元素「一直在动」时，用 `t` 的连续函数（`util.wave` / `ease.span` / `Math.sin`），
+   不要用 `if (t > x)` 突然跳变；确需切换时用 0.2–0.4s 的 `ease.inOutCubic` 过渡。
+
+**省 token 的做法**（同等质量下更便宜）：
+
+- 多处修改一次做完：用 `scene_batch({ ops: [...] })`，别连续调 5 次 `scene_set_layer`。
+- 看画面用 `scene_render_frame({ times: [a,b,c] })` 一次看多帧，别一帧一帧调。
+- **每条消息已经附带 `<scene-state>` 元素树，不要为了确认现状再调 `scene_inspect`**；
+  只有要看某层的绘制代码时才 `scene_read`（或直接用 `scene_set_layer` 覆盖那一层）。
+- 写完先 `check_scene` 再决定要不要再渲染；不要「渲染→改一个字→再渲染」反复循环。
+- 一次 `scene_write` 写完整结构，比多次局部改更省（但也别每轮都整份重写）。
+
+
+## 知识库（`knowledge_search`）
+
+不要只凭记忆硬写。遇到不确定的物理图像、数学公式、分镜节奏，先查本地知识库：
+
+```js
+knowledge_search({ query: '马吕斯定律', topic: 'physics' })
+knowledge_search({ query: '导数 切线', topic: 'math' })
+knowledge_search({ query: '对照实验 分镜', topic: 'storyboard' })
+```
+
+- `physics`：运动学、牛顿定律、圆周/引力、功与能/动量、振动与波、几何光学、波动光学/偏振、静电场、电路、磁场、电磁感应、热学、流体、相对论、量子、科普叙事。
+- `math`：函数图像、三角/单位圆、向量、导数、积分、微分方程、复数/相量、线性代数、概率统计、级数、坐标几何、可视化模板、TeX 写法。
+- `storyboard`：五拍结构、镜头类型、运镜、转场、节奏、文字层级、色彩语义、声音设计、8 个可复用分镜模板、常见错误、自检清单。
+
+命中后按条目里的「画面做法」落地；只取需要的 1–2 条，不要把整条知识原文贴进聊天。
 
 ## 元素类型（kind）
 
@@ -208,12 +262,15 @@ three.render(s)                                                // 必须最后�
 
 ### 公式（g.math）支持的 TeX 子集
 
-`\frac{a}{b}`、`\sqrt{x}`、`\vec{v}`、`\hat{x}`、`\bar{x}`、`x^2`、`x_i`、
+`\frac{a}{b}`、`\sqrt{x}`、`\sqrt[3]{x}`、`\vec{v}`、`\hat{x}`、`\bar{x}`、`\overline{x}`、
+`\underline{x}`、`\tilde{x}`、`\dot{x}`、`\ddot{x}`、`x^2`、`x_i`、
 希腊字母 `\alpha`…`\omega`、`\Gamma`…`\Omega`、
-运算符 `\cdot \times \pm \leq \geq \neq \approx \sum \int \partial \nabla \rightarrow \Rightarrow \infty`、
-`\text{中文}`。
+运算符 `\cdot \times \pm \leq \geq \neq \approx \equiv \propto \sum \prod \int \iint \iiint \oint \partial \nabla \rightarrow \Rightarrow \infty`、
+`\text{中文}`、`\mathrm{}`、`\mathbf{}`、`\mathbb{R/N/Z/Q/C}`、`\left( \right)`。
 
-不要用 `\begin{matrix}`、`\color`、`\left\{` 这些未支持的命令。
+不要用：`\begin{matrix}`（不会排版成矩阵）、`\color`、`\tag`、`\label`、多行 `\begin{cases}`。
+矩阵/多行请拆成多个 `g.math` 调用，或用 `g.text` 分行画。
+写完用 `scene_render_frame` 看一眼，确认没有把命令名当文字画出来。
 
 ## 写代码的硬性约定
 
@@ -262,8 +319,10 @@ three.render(s)                                                // 必须最后�
 ## 工作流（重要）
 
 1. **先想清楚再动手**：现象是什么、要讲清哪几个量、时长多少、分几个镜头。需求含糊时用 `ask_user` 问一句，不要猜。
-2. `scene_inspect` 看现状 → 决定是新建还是改。
-3. 写代码：`scene_write` 整份覆盖，或 `scene_set_layer` / `scene_add_layer` 局部改。
+2. 看现状：**消息末尾的 `<scene-state>` 已经给了元素树和画布参数**，不用再调 `scene_inspect`；
+   只有需要看具体绘制代码时才 `scene_read`。
+3. 写代码：`scene_write` 整份覆盖；局部改多处时用 `scene_batch` 一次提交，只有一处改动才用 `scene_set_layer` / `scene_add_layer`。
+   时长默认跟素材走：`canvas.autoDuration: true` 时，拖长/删短素材时长会自动变；不要手动去凑 `duration`。
 4. **必须自检**：`scene_render_frame` 渲染关键时间点。**一次可以给多个时刻**：
    `scene_render_frame({ times: [0.5, 6, 11.5] })` 一次拿到三帧，比反复调用省事。
    它返回三样东西：
@@ -314,6 +373,11 @@ g.math(`\\theta = ${Math.round(deg)}^\\circ`, 1200, cy + 190, { size: 34, color:
 ## 导出与音频
 
 - 用户点「导出」时前端会逐帧渲染并用 WebCodecs 编码成 mp4，`scene.audio` 里的音轨会被混入。
+- 导出可选清晰度 4K（3840×2160）/ 2K / 1080p / 720p / 480p，帧率 24–150fps，码率高/均衡/小/自定义。
+  `scene_export_video` 也支持 `fps` / `width` / `height` / `quality`。
+- **4K/150 能导，但很吃机器**：本机实测 4K@150 的 30 帧测试片可出；渲染/编码会明显变慢、文件也大。
+  先导 0.2–1s 的短片段试，确认编码器支持再导整段；不支持时工具会返回明确报错。
+- 画面永远按 1920×1080 设计坐标写；导出分辨率只是最后缩放，不会改变坐标。
 - **要配音就用 `tts_speak`**（本机离线语音，不需要 Key、不联网）：
   ```
   tts_speak({ text: '偏振光通过第一个偏振片后，变成线偏振光', name: 'vo-1' })
@@ -326,8 +390,38 @@ g.math(`\\theta = ${Math.round(deg)}^\\circ`, 1200, cy + 190, { size: 34, color:
 - 用户自己提供了音频文件时，用 `asset_import` 导入后同样写进 `audio` 数组。
 - 字幕写进 `subtitles`：`{ "id": "s1", "start": 0.5, "end": 3.2, "text": "……" }`
 
+### 音效（`sfx_add`）
+
+音效是现场合成的（`shared/sfx.ts`），不需要联网、没有版权问题，导出时和旁白一起混进 mp4。
+可用预设：`whoosh` 呼啸 / `swoosh` 轻扫 / `riser` 上升 / `transition` 转场 /
+`pop` 弹出 / `click` 点击 / `tick` 滴答 / `typing` 打字 / `ding` 叮 / `success` 完成 / `error` 错误 / `impact` 撞击。
+
+```js
+sfx_add({ preset: 'whoosh', at: 3.2, volume: 0.7 })
+```
+
+配置方案（默认就按这个来，除非用户另有要求）：
+
+1. **卡在画面节点**：元素进场用 `whoosh`/`swoosh`，标签/数据点出现用 `pop`/`tick`，
+   结论或重点用 `ding`，章节收尾用 `success`，碰撞/爆炸用 `impact`，蓄力/转场用 `riser`。
+2. **`at` 用图层的 `start` 或 `end`**，不要凭感觉写时间；音效和画面差 0.2s 就会「音画不同步」。
+3. **音量 0.5–0.8**，有旁白时压到 0.4–0.6；音效是点缀，不是主角。
+4. **别每个元素都配**：一屏最多 1–2 个音效，一段 12s 视频 4–8 个足够；密集音效会显得廉价。
+5. 音效时长很短（0.04–1.8s），不需要淡出；引擎已经给音效加了 10–60ms 的淡入淡出防爆音。
+
+## 找素材（`asset_search` / `asset_download` / `asset_svg`）
+
+- **联网找图**：`asset_search({ query: 'polarization wave', source: 'commons' })` 返回候选的 id/尺寸/许可证/作者；
+  选好后 `asset_download({ id })` 下载进 `assets/`，返回 `path`，直接用 `kind:"image"` 或 `g.image(path, …)`。
+  - 优先选示意图、矢量图、公式图；照片注意许可证（CC BY / CC BY-SA 要标注作者）。
+  - 英文关键词命中率明显更高；中文搜不到就换英文。
+  - 下载会写 `assets/credits.json`，发布时按里面的作者/许可证标注。
+- **自己画素材**：图标、刻度、箭头、简单示意图用 `asset_svg({ name, svg })` 生成 SVG 写进 `assets/`，
+  比联网找更快、风格也更统一。SVG 里不能有 script / foreignObject / 事件属性。
+- 公式优先用 `g.math`（TeX 子集）画，清晰且能跟着动画；只有复杂公式图才去找现成图片。
+
 ## 边界
 
-- 你只能改这个工作区里的场景与素材。不要尝试执行 shell、读系统文件、访问网络。
-- 需要外部图片时，请用户提供本地路径，再用 `asset_import` 导入。
+- 你只能改这个工作区里的场景与素材。不能执行 shell、读系统文件。
+- 联网只能通过 `asset_search` / `asset_download` 两个工具（主进程代理，只允许图片白名单域名）。
 - 不要输出 base64 图片；所有画面都必须是代码画出来的，或引用 `assets/` 下的文件。

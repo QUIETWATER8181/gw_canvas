@@ -17,7 +17,7 @@ export interface ModelConnection {
 }
 
 export interface AgentStatus {
-  phase: 'idle' | 'starting' | 'ready' | 'running' | 'error'
+  phase: 'idle' | 'starting' | 'ready' | 'running' | 'paused' | 'error'
   sessionId?: string
   detail?: string
 }
@@ -129,8 +129,24 @@ export interface ExportRequest {
   from?: number
   to?: number
   fps?: number
+  /** 输出分辨率（缺省用场景设计尺寸） */
+  width?: number
+  height?: number
+  /** 目标码率（bps） */
+  bitrate?: number
+  quality?: 'high' | 'balanced' | 'small'
   /** 导出完成后是否在文件夹中显示 */
   reveal?: boolean
+}
+
+/** 导出画质设置：对话框里选，存在本地（不写进草稿） */
+export interface ExportFormat {
+  /** 'source' 表示跟场景设计尺寸走 */
+  resolution: 'source' | '4k' | '2k' | '1080p' | '720p' | '480p'
+  fps: number
+  /** 'auto' 按分辨率/帧率估；也可以直接给 bps */
+  quality: 'high' | 'balanced' | 'small' | 'custom'
+  bitrateMbps?: number
 }
 
 export interface ExportProgress {
@@ -187,6 +203,83 @@ export interface VisionResult {
   error?: string
 }
 
+/** ---- 素材检索（主进程联网，渲染进程只拿结果） ---- */
+export type AssetSearchSource = 'commons' | 'openverse'
+
+export interface AssetSearchItem {
+  id: string
+  title: string
+  /** 已缓存到本机的缩略图（gewu://cache/…），可能为 null */
+  thumbUrl: string | null
+  /** 原图地址，仅用于下载 */
+  fullUrl: string
+  width: number
+  height: number
+  mime: string
+  license: string
+  artist: string
+  sourceUrl: string
+  source: AssetSearchSource
+  downloadable: boolean
+}
+
+export interface AssetSearchResponse {
+  ok: boolean
+  query: string
+  source: AssetSearchSource
+  items: AssetSearchItem[]
+  error?: string
+}
+
+export interface AssetCredit {
+  file: string
+  title: string
+  author: string
+  license: string
+  source: string
+  downloadedAt: string
+}
+
+export interface AssetDownloadResult {
+  ok: boolean
+  path?: string
+  name?: string
+  bytes?: number
+  width?: number
+  height?: number
+  credit?: AssetCredit
+  error?: string
+}
+
+/** 音效预设（和 shared/sfx.ts 保持一致，这里只放界面需要的字段） */
+export interface SfxPresetInfo {
+  id: string
+  label: string
+  category: 'transition' | 'ui' | 'impact' | 'music'
+  duration: number
+  desc: string
+}
+
+/** ---- 本地知识库（物理 / 数学 / 分镜） ---- */
+export type KnowledgeTopic = 'physics' | 'math' | 'storyboard'
+
+export interface KnowledgeHit {
+  topic: KnowledgeTopic
+  title: string
+  keywords: string
+  body: string
+  score: number
+}
+
+export interface KnowledgeSearchResult {
+  ok: boolean
+  query: string
+  topic?: KnowledgeTopic
+  hits: KnowledgeHit[]
+  /** 没命中时给可用目录 */
+  catalog?: string
+}
+
 /** preload 暴露给渲染进程的 API */
 export interface GewuApi {
   getState(): Promise<AppState>
@@ -217,7 +310,23 @@ export interface GewuApi {
 
   sendPrompt(text: string, context?: PromptContext): Promise<void>
   cancelPrompt(): Promise<void>
+  /** 暂停生成：立刻停止花 token，保留已生成的部分；用 resumePrompt 接着写 */
+  pausePrompt(): Promise<void>
+  resumePrompt(): Promise<void>
+  /** 本会话累计 token 用量（代理统计） */
+  getUsage(): Promise<{ inputTokens: number; outputTokens: number; requests: number }>
   newSession(): Promise<void>
+
+  /** 把渲染进程生成的二进制（音效 wav 等）写进 assets/ */
+  saveAsset(name: string, bytes: Uint8Array): Promise<{ ok: boolean; path?: string; error?: string }>
+  /** 联网检索图片素材（Wikimedia Commons / Openverse） */
+  searchAssets(input: { query: string; source?: AssetSearchSource; limit?: number }): Promise<AssetSearchResponse>
+  /** 把检索结果下载进当前草稿的 assets/，并记录署名 */
+  downloadAsset(item: AssetSearchItem): Promise<AssetDownloadResult>
+  /** 已下载素材的署名清单（发布时标注用） */
+  listCredits(): Promise<AssetCredit[]>
+  /** 本地知识库检索（物理/数学/分镜），也供 agent 的 knowledge_search 使用 */
+  knowledgeSearch(input: { query: string; topic?: KnowledgeTopic; limit?: number }): Promise<KnowledgeSearchResult>
 
   /** 弹出保存对话框，返回用户选择的 mp4 路径 */
   chooseExportPath(req: ExportRequest): Promise<{ ok: boolean; outPath?: string; error?: string }>

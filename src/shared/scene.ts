@@ -7,6 +7,33 @@ export type Rect = { x: number; y: number; w: number; h: number }
 export type BlendMode = 'source-over' | 'lighter' | 'multiply' | 'screen' | 'overlay'
 
 /**
+ * 图层进出场动画。默认是渐隐渐显（fade），也可以滑动/缩放/擦除。
+ * 时间都相对图层自己的 start/end，完全由 t 决定，导出可复现。
+ */
+export type TransitionKind =
+  | 'fade'
+  | 'slide-left'
+  | 'slide-right'
+  | 'slide-up'
+  | 'slide-down'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'wipe-left'
+  | 'wipe-right'
+
+export interface LayerTransition {
+  kind?: TransitionKind
+  /** 时长（秒），默认 0.5 */
+  dur?: number
+  /** 延迟（秒），相对 start（进场）/ end（出场） */
+  delay?: number
+  /** 缓动，默认 outCubic */
+  ease?: 'linear' | 'outCubic' | 'inOutCubic' | 'outBack'
+  /** slide / wipe 的距离（设计像素），默认 80 */
+  distance?: number
+}
+
+/**
  * 图层种类。缺省（undefined）= 'code'，兼容老场景：
  * 老场景每个图层就是一段 draw 代码，没有元素结构。
  *
@@ -87,6 +114,10 @@ export interface SceneLayer {
   shape?: ShapeProps
   /** 组合里的元素，按数组顺序从下往上画 */
   children?: SceneLayer[]
+  /** 进场动画（相对 start）；不写就是硬切 */
+  enter?: LayerTransition
+  /** 出场动画（相对 end）；不写就是硬切 */
+  exit?: LayerTransition
   /** 自由备注，给 agent 和人看 */
   note?: string
 }
@@ -111,6 +142,11 @@ export interface SceneAudio {
   /** 音频时长（秒）；未知时按整段算 */
   dur?: number
   volume?: number
+  /** 用途：旁白 / 音效 / 背景音乐。只影响分组显示与默认音量。 */
+  kind?: 'voice' | 'sfx' | 'music'
+  /** 淡入 / 淡出（秒），音效尤其需要，避免爆音 */
+  fadeIn?: number
+  fadeOut?: number
 }
 
 export interface SceneSubtitle {
@@ -139,7 +175,18 @@ export interface SceneGuides {
 export interface Scene {
   version: 1
   meta: SceneMeta
-  canvas: { width: number; height: number; fps: number; duration: number; background?: string }
+  canvas: {
+    width: number
+    height: number
+    fps: number
+    duration: number
+    background?: string
+    /**
+     * 时长跟随素材：打开后，时长自动等于「最晚结束的图层 / 音轨 / 字幕」，
+     * 像剪映一样拖长素材就自动变长、删掉就自动变短。缺省 = 手动。
+     */
+    autoDuration?: boolean
+  }
   theme: SceneTheme
   layers: SceneLayer[]
   audio: SceneAudio[]
@@ -191,4 +238,51 @@ export const KIND_LABEL: Record<LayerKind, string> = {
   image: '图片',
   shape: '形状',
   code: '代码'
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10
+
+/** 图层（含组合内子元素）最晚的结束时刻；没写 end 的层不算（它跟随场景时长） */
+export function layerEndTime(layer: SceneLayer): number {
+  let end = typeof layer.end === 'number' && Number.isFinite(layer.end) ? layer.end : 0
+  for (const kid of layer.children ?? []) end = Math.max(end, layerEndTime(kid))
+  return end
+}
+
+/**
+ * 内容真正需要的时长：所有显式 end 的图层、音轨（start + dur）、字幕的最晚结束。
+ * 用来实现「时长跟素材走」。
+ */
+export function contentEnd(scene: Scene): number {
+  let end = 0
+  const walk = (layers: SceneLayer[]) => {
+    for (const layer of layers) {
+      end = Math.max(end, layerEndTime(layer))
+      if (layer.children?.length) walk(layer.children)
+    }
+  }
+  walk(scene.layers)
+  for (const a of scene.audio) {
+    if (typeof a.dur === 'number' && a.dur > 0) end = Math.max(end, a.start + a.dur)
+  }
+  for (const s of scene.subtitles) end = Math.max(end, Number(s.end) || 0)
+  return Math.max(0, end)
+}
+
+/** 打开 autoDuration 时，把时长对齐到内容；否则原样返回 */
+export function applyAutoDuration(scene: Scene): Scene {
+  if (!scene.canvas.autoDuration) return scene
+  const end = contentEnd(scene)
+  // 空场景 / 全是「跟随整段」的图层时不要缩到 1s
+  if (end < 0.1) return scene
+  const next = Math.max(1, round1(end))
+  if (Math.abs(next - scene.canvas.duration) < 0.05) return scene
+  return { ...scene, canvas: { ...scene.canvas, duration: next } }
+}
+
+/** 内容超出当前时长时自动延长（剪映式：把素材拖出时间轴就变长） */
+export function extendDurationTo(scene: Scene, t: number): Scene {
+  const next = Math.max(1, round1(t))
+  if (next <= scene.canvas.duration + 0.05) return scene
+  return { ...scene, canvas: { ...scene.canvas, duration: next } }
 }

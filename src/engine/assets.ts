@@ -79,13 +79,13 @@ export function scanAssetRefs(scene: { layers: SceneLayerLike[]; audio?: { src?:
   const re = /(?:asset\(\s*|g\.image\(\s*|g\.video\(\s*)['"`]([^'"`]+)['"`]/g
   const walk = (layers: SceneLayerLike[] | undefined) => {
     for (const layer of layers ?? []) {
-      if (layer.image?.src && /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(layer.image.src)) found.add(layer.image.src)
+      if (layer.image?.src && /\.(png|jpe?g|webp|gif|bmp|avif|svg)$/i.test(layer.image.src)) found.add(layer.image.src)
       if (layer.draw) {
         re.lastIndex = 0
         let m: RegExpExecArray | null
         while ((m = re.exec(layer.draw))) {
           const name = m[1]
-          if (!/\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(name)) continue
+          if (!/\.(png|jpe?g|webp|gif|bmp|avif|svg)$/i.test(name)) continue
           found.add(name)
         }
       }

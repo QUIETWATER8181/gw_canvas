@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 
-type Tab = 'start' | 'canvas' | 'group' | 'timeline' | 'draft' | 'keys'
+type Tab = 'start' | 'canvas' | 'group' | 'timeline' | 'ai' | 'draft' | 'keys'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'start', label: '快速上手' },
   { id: 'canvas', label: '画布' },
   { id: 'group', label: '组合' },
   { id: 'timeline', label: '时间轴' },
+  { id: 'ai', label: 'AI · 音效 · 素材' },
   { id: 'draft', label: '草稿与导出' },
   { id: 'keys', label: '快捷键' }
 ]
@@ -176,6 +177,36 @@ export function HelpDialog({ open, onClose }: { open: boolean; onClose(): void }
               <Row k={<K>空格</K>}>播放 / 暂停</Row>
               <Row k={<><K>←</K> / <K>→</K></>}>逐帧步进，加 <K>Shift</K> 是 10 帧；<K>Home</K> / <K>End</K> 跳首尾</Row>
               <Row k="右下角 − / ＋">缩放轨道；「时长」输入框改整段长度</Row>
+
+              <h3>时长跟着素材走（剪映式）</h3>
+              <Row k="自动">打开后，时长 = 最晚结束的图层/音轨/字幕；拖长素材自动变长，删掉自动变短</Row>
+              <Row k="适配">一次性把时长对齐到素材结束，不改变「自动」开关</Row>
+              <Row k="手动拖长">把剪辑块右端拖出时间轴，松手后时间轴自动延长</Row>
+              <Row k="手动缩短">关掉「自动」后，直接改「时长」输入框；超出的部分会被裁掉</Row>
+            </>
+          )}
+
+          {tab === 'ai' && (
+            <>
+              <h3>AI 助手</h3>
+              <Row k="发消息">Enter 发送，Shift+Enter 换行；画布上选中的元素、播放头、框选区域会一起告诉 AI</Row>
+              <Row k="进度卡">右栏顶部显示耗时、已完成的步骤；点标题可以收起，只留一行</Row>
+              <Row k="暂停生成">立刻停止请求，不再消耗 token；已写进场景的改动和已生成的文字都保留</Row>
+              <Row k="继续">从断点接着做，不会把前面的内容重写一遍</Row>
+              <Row k="停止 / 结束">结束这一轮，状态回到「就绪」</Row>
+
+              <h3>音效（左栏「音频」）</h3>
+              <Row k="音效库">12 个现场合成的音效（呼啸/轻扫/上升/转场/弹出/点击/滴答/打字/叮/完成/错误/撞击），点 ▶ 试听</Row>
+              <Row k="＋">把音效加到播放头位置，作为一条音轨</Row>
+              <Row k="按图层入场铺音效">给每个从中间开始的顶层图层自动配一条音效（组合→呼啸、文字→弹出、图片→轻扫、形状→滴答）</Row>
+              <Row k="调音量">在「音轨」列表里拖音量条；音效默认 0.8，有旁白时建议压到 0.4–0.6</Row>
+
+              <h3>找素材（左栏「搜索」）</h3>
+              <Row k="搜图">Wikimedia Commons / Openverse，无需 Key；英文关键词命中率更高</Row>
+              <Row k="插入画面">下载进当前草稿的 assets/，按播放头放上时间轴，并自动加 0.45s 渐显</Row>
+              <Row k="许可证">每张图都带许可证和作者，下载会写进 assets/credits.json，发布时照着标注</Row>
+              <Row k="AI 也会找">直接跟 AI 说「找一张偏振光的示意图」，它会用 asset_search / asset_download</Row>
+              <Row k="知识库">AI 写场景前会按需查本地知识库（物理/数学/分镜），用 knowledge_search；不用把整份知识塞进对话</Row>
             </>
           )}
 
@@ -195,7 +226,7 @@ export function HelpDialog({ open, onClose }: { open: boolean; onClose(): void }
               <h3>导出</h3>
               <Row k="右上「导出」">选目录、文件名、「整段」或「只导一段」</Row>
               <Row k="默认目录">在「模型设置 → 导出与保存」里定，导出时还能临时改</Row>
-              <Row k="格式">固定 1920×1080 / 30fps / H.264（有配音就带 AAC）</Row>
+              <Row k="格式">清晰度（4K / 2K / 1080p / 720p / 480p）、帧率（24–150）、码率（高/均衡/小/自定义）都能选，对话框里会预估文件大小；4K/150 很吃机器，先导短片段试</Row>
               <Row k="同名文件">自动加 -1、-2，不会覆盖你已有的成片</Row>
             </>
           )}

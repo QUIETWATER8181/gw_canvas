@@ -6,10 +6,13 @@ import { ModelProxy } from './model-proxy'
 import { ToolGateway } from './tool-gateway'
 import { synthesize } from '../tts'
 import { describeImage } from '../vision'
-import type { AgentStatus, ChatMessage, ScenePatch, ToolInvocation, ToolResult } from '@shared/ipc'
+import { renderSfxWav, SFX_BY_ID } from '@shared/sfx'
+import type { AgentStatus, AssetSearchItem, ChatMessage, ScenePatch, ToolInvocation, ToolResult } from '@shared/ipc'
 import type { Scene, SceneLayer } from '@shared/scene'
 import { KIND_LABEL, layerKind } from '@shared/scene'
 import { collectIds, findLayer, insertAt, removeAt, updateAt } from '@shared/layers'
+import type { AssetSearch } from '../web-search'
+import type { KnowledgeBase, KnowledgeTopic } from '../knowledge'
 
 /**
  * ACP 把上游模型的报错层层包了一层壳（「DSH session/prompt 失败：Internal error: turn failed: …」），
@@ -23,6 +26,13 @@ function humanizeAgentError(detail: string): string {
     .trim()
   return cleaned || detail
 }
+
+/** scene_set_layer / scene_batch 允许直接覆盖的字段 */
+const LAYER_PATCH_KEYS = [
+  'name', 'draw', 'x', 'y', 'w', 'h', 'scale', 'rotation', 'opacity', 'blend',
+  'visible', 'locked', 'note', 'bounds', 'kind', 'text', 'image', 'shape',
+  'children', 'enter', 'exit'
+] as const
 
 /** 一层到底有没有「能画出来」的内容：typed 元素不需要 draw */
 function hasAnyContent(layer: SceneLayer): boolean {
@@ -45,6 +55,10 @@ export interface BridgeOptions {  runtimeRoot: string
   getScenePath(): string
   /** 当前草稿名，写进 prompt 上下文（让 agent 知道自己在哪个草稿里干活） */
   getDraftName?(): string
+  /** 联网素材检索（可选；没给就没有 asset_search 工具） */
+  search?: AssetSearch
+  /** 本地知识库（物理/数学/分镜） */
+  knowledge?: KnowledgeBase
   onChat(msg: ChatMessage): void
   onStatus(status: AgentStatus): void
   onSceneChanged(patch: ScenePatch): void
@@ -68,11 +82,15 @@ export class AgentBridge {
   private gateway: ToolGateway | null = null
   private sessionId: string | null = null
   private status: AgentStatus = { phase: 'idle' }
+  /** 用户点了「暂停」：取消当前请求但保留已生成内容，等「继续」 */
+  private paused = false
   private busy = false
   private startPromise: Promise<void> | null = null
   private assistantBuffer = ''
   private assistantId: string | null = null
   private toolCalls = new Map<string, { msgId: string; call: NonNullable<ChatMessage['tools']>[number] }>()
+  /** 最近一次素材检索的结果：asset_download 用 id 回查，避免模型抄一长串 URL */
+  private lastSearchResults = new Map<string, AssetSearchItem>()
 
   /** 本轮某条 assistant 消息已经跑过的工具（文字分片回传时要带上，否则工具条会消失） */
   private toolsFor(msgId: string): NonNullable<ChatMessage['tools']> | undefined {
@@ -108,6 +126,11 @@ export class AgentBridge {
   }
 
   getStatus(): AgentStatus { return this.status }
+
+  /** 本轮/本会话的 token 用量（代理侧统计；换会话会清零） */
+  getUsage(): { inputTokens: number; outputTokens: number; requests: number } {
+    return this.proxy?.usage ?? { inputTokens: 0, outputTokens: 0, requests: 0 }
+  }
 
   /** 正在跑一轮 prompt 时不许切草稿（cwd 会变，工具会写错地方） */
   isBusy(): boolean { return this.busy }
@@ -217,6 +240,7 @@ export class AgentBridge {
     }
     if (this.busy) throw new Error('agent 正在处理上一条消息')
     this.busy = true
+    this.paused = false
     this.lastUserText = text
     this.assistantBuffer = ''
     this.toolCalls.clear()
@@ -242,19 +266,61 @@ export class AgentBridge {
           tools: this.toolsFor(assistantId)
         })
       }
-      this.setStatus({ phase: 'ready', sessionId: this.sessionId })
+      if (this.paused) {
+        this.setStatus({ phase: 'paused', detail: '已暂停生成', sessionId: this.sessionId })
+        this.chat({ role: 'system', text: '⏸ 已暂停，当前这轮不再消耗 token。点「继续」会从中断处接着做。' })
+      } else {
+        this.setStatus({ phase: 'ready', sessionId: this.sessionId })
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       this.o.log('bridge', `prompt failed: ${detail}`)
-      const human = humanizeAgentError(detail)
-      this.o.onChat({ id: assistantId, role: 'assistant', text: human, at: Date.now(), error: true, tools: this.toolsFor(assistantId) })
-      this.setStatus({ phase: 'error', detail: human, sessionId: this.sessionId })
+      if (this.paused) {
+        this.setStatus({ phase: 'paused', detail: '已暂停生成', sessionId: this.sessionId })
+        this.chat({ role: 'system', text: '⏸ 已暂停，当前这轮不再消耗 token。点「继续」会从中断处接着做。' })
+      } else {
+        const human = humanizeAgentError(detail)
+        this.o.onChat({ id: assistantId, role: 'assistant', text: human, at: Date.now(), error: true, tools: this.toolsFor(assistantId) })
+        this.setStatus({ phase: 'error', detail: human, sessionId: this.sessionId })
+      }
     } finally {
       this.busy = false
     }
   }
 
   cancel(): void {
+    this.paused = false
+    if (this.dsh && this.sessionId) {
+      this.dsh.notify('session/cancel', { sessionId: this.sessionId })
+    }
+  }
+
+  /**
+   * 暂停生成：不是「暂停显示」，而是真的停掉当前模型请求，不再花 token。
+   * 已经写进场景的改动保留；已生成的文字保留。继续时发一条「从断点接着做」的指令。
+   */
+  pause(): void {
+    if (this.status.phase !== 'running') return
+    this.paused = true
+    this.setStatus({ phase: 'paused', detail: '正在暂停…', sessionId: this.sessionId ?? undefined })
+    this.cancelNotify()
+  }
+
+  /** 继续被暂停的那一轮 */
+  async resume(): Promise<void> {
+    if (this.status.phase !== 'paused') return
+    const partial = (this.assistantBuffer ?? '').trim()
+    const tail = partial.length > 700 ? partial.slice(-700) : partial
+    const text = [
+      '继续上一轮被暂停的任务。',
+      tail ? `你已经写到的内容（可能不完整）：「${tail}」` : '',
+      '请从断点接着做，不要重复已经完成的工具调用和已经写好的内容；如果任务其实已经完成，就简短收尾。'
+    ].filter(Boolean).join('\n')
+    await this.prompt(text)
+  }
+
+  /** 只发 ACP cancel，不改 paused 标记 */
+  private cancelNotify(): void {
     if (this.dsh && this.sessionId) {
       this.dsh.notify('session/cancel', { sessionId: this.sessionId })
     }
@@ -280,10 +346,14 @@ export class AgentBridge {
         const preview = l.text ? ` text=${JSON.stringify(l.text.content.slice(0, 40))}` : ''
         const src = l.image ? ` src=${JSON.stringify(l.image.src)}` : ''
         const shape = l.shape ? ` shape=${l.shape.type}` : ''
+        const tr = [
+          l.enter ? `enter=${l.enter.kind ?? 'fade'}/${l.enter.dur ?? 0.5}s` : '',
+          l.exit ? `exit=${l.exit.kind ?? 'fade'}/${l.exit.dur ?? 0.5}s` : ''
+        ].filter(Boolean).join(' ')
         const pad = '  '.repeat(depth + 1)
         const marker = depth === 0 ? `${i + 1}. ` : '- '
         layerLines.push(
-          `${pad}${marker}[${KIND_LABEL[layerKind(l)]}] id=${l.id} name=${JSON.stringify(l.name)} time=${range}${box}${shape}${src}${preview}${bounds}${note}${picked}`
+          `${pad}${marker}[${KIND_LABEL[layerKind(l)]}] id=${l.id} name=${JSON.stringify(l.name)} time=${range}${box}${shape}${src}${preview}${tr ? ` ${tr}` : ''}${bounds}${note}${picked}`
         )
         if (l.children?.length) walk(l.children, depth + 1)
       })
@@ -306,7 +376,7 @@ export class AgentBridge {
       `草稿：${this.o.getDraftName?.() || '未命名'}（每个草稿是独立工作区，素材和对话互不影响）`,
       `文件：scene.json（工作区根目录）`,
       `标题：${scene.meta.title}${scene.meta.brief ? `｜主题：${scene.meta.brief}` : ''}`,
-      `画布：${scene.canvas.width}×${scene.canvas.height} @ ${scene.canvas.fps}fps，时长 ${scene.canvas.duration}s`,
+      `画布：${scene.canvas.width}×${scene.canvas.height} @ ${scene.canvas.fps}fps，时长 ${scene.canvas.duration}s${scene.canvas.autoDuration ? '（自动跟随素材）' : ''}`,
       `图层（顶层 ${scene.layers.length} 个，共 ${collectIds(scene.layers).length} 个元素；组合内缩进列出）：`,
       layerLines.length ? layerLines.join('\n') : '  （空）',
       `音频：${scene.audio.length} 条｜字幕：${scene.subtitles.length} 条`,
@@ -425,7 +495,7 @@ export class AgentBridge {
       if (!hit) throw new Error(`图层 ${id} 不存在；现有：${collectIds(scene.layers).join(', ')}`)
       const patch = (args.patch ?? {}) as Record<string, unknown>
       const merged: SceneLayer = { ...hit.layer }
-      for (const key of ['name', 'draw', 'x', 'y', 'w', 'h', 'scale', 'rotation', 'opacity', 'blend', 'visible', 'locked', 'note', 'bounds', 'kind', 'text', 'image', 'shape', 'children'] as const) {
+      for (const key of LAYER_PATCH_KEYS) {
         if (patch[key] !== undefined) (merged as unknown as Record<string, unknown>)[key] = patch[key]
       }
       if (patch.start !== undefined) merged.start = Number(patch.start)
@@ -474,6 +544,219 @@ export class AgentBridge {
       await writeSceneFile(this.o.getScenePath(), normalized)
       this.o.onSceneChanged({ scene: normalized, source: 'agent' })
       return { ok: true, count: collectIds(normalized.layers).length }
+    })
+
+    /**
+     * 批量改场景：一次工具调用完成多步修改。
+     * 省 token 的关键——模型每多一轮工具往返，就要把整段上下文再发一遍。
+     */
+    wrap('scene_batch', async (args) => {
+      const ops = Array.isArray(args.ops) ? args.ops as Record<string, unknown>[] : []
+      if (!ops.length) throw new Error('ops 为空；至少给一个操作')
+      if (ops.length > 60) throw new Error('一次最多 60 个操作，分两批更稳')
+      const { normalizeScene, writeSceneFile } = await import('../scene-store')
+      let scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
+      const applied: string[] = []
+      const errors: string[] = []
+
+      for (const [i, op] of ops.entries()) {
+        const kind = String(op.op ?? '')
+        try {
+          if (kind === 'canvas') {
+            Object.assign(scene.canvas, (op.canvas ?? {}) as Record<string, unknown>)
+            applied.push(`canvas`)
+            continue
+          }
+          if (kind === 'delete') {
+            const id = String(op.id ?? '')
+            const hit = findLayer(scene.layers, id)
+            if (!hit) throw new Error(`图层 ${id} 不存在`)
+            scene = { ...scene, layers: removeAt(scene.layers, hit.path) }
+            applied.push(`delete ${id}`)
+            continue
+          }
+          if (kind === 'add') {
+            const raw = op.layer as Record<string, unknown> | undefined
+            if (!raw || typeof raw !== 'object') throw new Error('缺少 layer 对象')
+            const layerKindRaw = typeof raw.kind === 'string' ? raw.kind : undefined
+            const hasContent = typeof raw.draw === 'string' || (layerKindRaw && ['text', 'image', 'shape', 'group'].includes(layerKindRaw))
+            if (!hasContent) throw new Error('layer 需要 draw 或 kind=text/image/shape/group')
+            const id = String(raw.id ?? `layer_${collectIds(scene.layers).length + 1}`)
+            if (collectIds(scene.layers).includes(id)) throw new Error(`id ${id} 已存在`)
+            const parentId = op.parent ? String(op.parent) : null
+            if (parentId) {
+              const parent = findLayer(scene.layers, parentId)
+              if (!parent) throw new Error(`父级 ${parentId} 不存在`)
+              scene = {
+                ...scene,
+                layers: updateAt(scene.layers, parent.path, {
+                  children: [...(parent.layer.children ?? []), { ...raw, id } as unknown as SceneLayer]
+                })
+              }
+            } else {
+              scene = { ...scene, layers: [...scene.layers, { ...raw, id } as unknown as SceneLayer] }
+            }
+            applied.push(`add ${id}`)
+            continue
+          }
+          if (kind === 'set') {
+            const id = String(op.id ?? '')
+            const hit = findLayer(scene.layers, id)
+            if (!hit) throw new Error(`图层 ${id} 不存在`)
+            const patch = (op.patch ?? {}) as Record<string, unknown>
+            const merged: SceneLayer = { ...hit.layer }
+            for (const key of LAYER_PATCH_KEYS) {
+              if (patch[key] !== undefined) (merged as unknown as Record<string, unknown>)[key] = patch[key]
+            }
+            if (patch.start !== undefined) merged.start = Number(patch.start)
+            if (patch.end !== undefined) merged.end = Number(patch.end)
+            scene = { ...scene, layers: updateAt(scene.layers, hit.path, merged) }
+            applied.push(`set ${id}`)
+            continue
+          }
+          throw new Error(`不认识的 op「${kind}」（只支持 set/add/delete/canvas）`)
+        } catch (error) {
+          errors.push(`第 ${i + 1} 个操作：${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+
+      const normalized = normalizeScene(scene)
+      await writeSceneFile(this.o.getScenePath(), normalized)
+      this.o.onSceneChanged({ scene: normalized, source: 'agent' })
+      return {
+        ok: errors.length === 0,
+        applied: applied.length,
+        actions: applied,
+        errors,
+        count: collectIds(normalized.layers).length,
+        duration: normalized.canvas.duration
+      }
+    })
+
+    /** 程序化生成一张 SVG 素材（图标、示意图、公式占位），不用联网 */
+    wrap('asset_svg', async (args) => {
+      const raw = String(args.svg ?? '').trim()
+      if (!/^<svg[\s>]/i.test(raw)) throw new Error('svg 必须是完整的 <svg …>…</svg>')
+      if (!/<\/svg>\s*$/i.test(raw)) throw new Error('svg 没有闭合（缺少 </svg>）')
+      if (raw.length > 200_000) throw new Error('SVG 太大（上限 200KB）')
+      if (/<script|<foreignObject|on\w+\s*=/i.test(raw)) throw new Error('SVG 里不允许 script / foreignObject / 事件属性')
+      const base = String(args.name ?? `svg-${Date.now()}`).replace(/[^\w.\-\u4e00-\u9fa5]/g, '_').replace(/\.svg$/i, '')
+      const assetsDir = join(this.o.getWorkspace(), 'assets')
+      await mkdir(assetsDir, { recursive: true })
+      const fileName = `${base}.svg`
+      await writeFile(join(assetsDir, fileName), raw, 'utf8')
+      return {
+        ok: true,
+        path: `assets/${fileName}`,
+        hint: '用 kind:"image" + image:{src:"assets/…svg"}，或在代码里 g.image("assets/…svg", x, y, w, h)'
+      }
+    })
+
+    /** 音效：现场合成一段 wav 并挂到时间轴上（不需要联网、没有版权问题） */
+    wrap('sfx_add', async (args) => {
+      const preset = String(args.preset ?? args.name ?? 'whoosh')
+      if (!SFX_BY_ID[preset]) throw new Error(`没有这个音效：${preset}。可用：${Object.keys(SFX_BY_ID).join(', ')}`)
+      const at = Math.max(0, Number(args.at ?? 0))
+      const volume = Math.max(0, Math.min(2, Number(args.volume ?? 0.8)))
+      const { normalizeScene, writeSceneFile } = await import('../scene-store')
+      const scene = normalizeScene(JSON.parse(await readFile(this.o.getScenePath(), 'utf8')))
+      const { bytes, duration } = renderSfxWav(preset)
+      const assetsDir = join(this.o.getWorkspace(), 'assets')
+      await mkdir(assetsDir, { recursive: true })
+      const fileName = `sfx-${preset}.wav`
+      await writeFile(join(assetsDir, fileName), bytes)
+      const track = {
+        id: `sfx_${preset}_${Math.round(at * 100)}`,
+        name: `${SFX_BY_ID[preset].label}（音效）`,
+        src: `assets/${fileName}`,
+        start: at,
+        dur: duration,
+        volume,
+        kind: 'sfx' as const,
+        fadeIn: Math.min(0.01, duration / 4),
+        fadeOut: Math.min(0.06, duration / 3)
+      }
+      const audio = scene.audio.filter(a => a.id !== track.id)
+      audio.push(track)
+      const normalized = normalizeScene({ ...scene, audio })
+      await writeSceneFile(this.o.getScenePath(), normalized)
+      this.o.onSceneChanged({ scene: normalized, source: 'agent' })
+      return {
+        ok: true,
+        path: `assets/${fileName}`,
+        duration,
+        at,
+        tracks: normalized.audio.length,
+        hint: '音效已挂到时间轴。要跟画面节点对齐，就把 at 设成那一层的 start/end。'
+      }
+    })
+
+    /** 联网找素材：Wikimedia Commons / Openverse，返回缩略图与许可证 */
+    wrap('asset_search', async (args) => {
+      if (!this.o.search) throw new Error('素材检索没有启用')
+      const query = String(args.query ?? '').trim()
+      if (!query) throw new Error('缺少 query')
+      const source = args.source === 'openverse' ? 'openverse' : 'commons'
+      const limit = Math.max(1, Math.min(24, Number(args.limit ?? 12)))
+      const res = await this.o.search.search(query, source, limit)
+      if (!res.ok) throw new Error(res.error ?? '检索失败')
+      this.lastSearchResults.clear()
+      for (const item of res.items) this.lastSearchResults.set(item.id, item)
+      if (!res.items.length) return `没有找到「${query}」的图片。换英文关键词（如 "polarization wave"）通常更全。`
+      const lines = res.items.map((it, i) =>
+        `${i + 1}. id=${it.id}｜${it.title}｜${it.width}×${it.height}｜${it.license}｜${it.artist}` +
+        `${it.downloadable ? '' : '（来源不允许直接下载）'}`
+      )
+      return [
+        `在 ${source === 'commons' ? 'Wikimedia Commons' : 'Openverse'} 找到 ${res.items.length} 张「${query}」：`,
+        ...lines,
+        '',
+        '选好后调用 asset_download({ id })，图片会存进 assets/ 并记录署名。',
+        '优先选示意图/公式/矢量图；照片类要注意许可证（CC BY / CC BY-SA 需要标注作者）。'
+      ].join('\n')
+    })
+
+    /** 下载上一步检索到的素材 */
+    wrap('asset_download', async (args) => {
+      if (!this.o.search) throw new Error('素材检索没有启用')
+      const id = String(args.id ?? '')
+      const item = id ? this.lastSearchResults.get(id) : null
+      if (!item) throw new Error('找不到这个 id；先调 asset_search，再用返回的 id')
+      const res = await this.o.search.download(this.o.getWorkspace(), item)
+      if (!res.ok) throw new Error(res.error ?? '下载失败')
+      return {
+        ok: true,
+        path: res.path,
+        bytes: res.bytes,
+        size: `${item.width}×${item.height}`,
+        license: item.license,
+        author: item.artist,
+        source: item.sourceUrl,
+        hint: '用 kind:"image" + image:{src:path}，或代码里 g.image(path, x, y, w, h)。发布时记得按许可证标注作者。'
+      }
+    })
+
+    /**
+     * 本地知识库：物理 / 数学 / 剪辑分镜。
+     * 按需检索，只返回命中的 1–2 条，避免把整份知识塞进上下文。
+     */
+    wrap('knowledge_search', async (args) => {
+      const kb = this.o.knowledge
+      if (!kb) throw new Error('知识库没有加载')
+      const query = String(args.query ?? '').trim()
+      if (!query) throw new Error('缺少 query')
+      const topic = args.topic === 'physics' || args.topic === 'math' || args.topic === 'storyboard'
+        ? args.topic as KnowledgeTopic
+        : undefined
+      const limit = Math.max(1, Math.min(4, Number(args.limit ?? 2)))
+      const hits = kb.search(query, topic, limit)
+      if (!hits.length) {
+        return `没有匹配「${query}」的条目。可用目录：\n${kb.catalog()}\n\n换个更具体的关键词（如「马吕斯定律」「导数 切线」「对照实验 分镜」）再试。`
+      }
+      const blocks = hits.map(h =>
+        `## [${h.topic}] ${h.title}\n${h.body}`
+      )
+      return `知识库命中 ${hits.length} 条（score ${hits.map(h => h.score).join(' / ')}）：\n\n${blocks.join('\n\n---\n\n')}`
     })
 
     // 把「一整段画死的代码」重组成「组合 + 可单独编辑的元素」。
@@ -546,9 +829,17 @@ export class AgentBridge {
       const outName = String(args.name ?? `export-${Date.now()}.mp4`).replace(/[\\/:*?"<>|]/g, '_')
       const result = await this.o.invokeRendererTool({
         name: 'export_video',
-        args: { name: outName, from: args.from, to: args.to }
-      }, 30 * 60_000) as { path: string; frames: number; seconds: number }
-      return `已导出视频：${result.path}（${result.frames} 帧 / ${result.seconds.toFixed(1)}s）`
+        args: {
+          name: outName,
+          from: args.from,
+          to: args.to,
+          fps: args.fps,
+          width: args.width,
+          height: args.height,
+          quality: args.quality
+        }
+      }, 30 * 60_000) as { path: string; frames: number; seconds: number; width?: number; height?: number; fps?: number }
+      return `已导出视频：${result.path}（${result.frames} 帧 / ${result.seconds.toFixed(1)}s${result.width ? ` / ${result.width}×${result.height}@${result.fps}` : ''}）`
     })
 
     // 离线配音：系统 SAPI，不需要 Key。返回的 path 直接写进 scene.audio[].src

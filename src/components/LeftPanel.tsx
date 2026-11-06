@@ -6,12 +6,23 @@ import { QUICK_STARTS } from '../content/quickstarts'
 import { keyframePrompt, referencePrompt } from '../content/prompts'
 import { DRAG_MIME } from './Timeline'
 import { measureImage } from '../engine/assets'
+import { AssetSearchPanel } from './AssetSearchPanel'
+import { SfxPanel } from './SfxPanel'
 
 interface Props {
   onToast(t: { text: string; kind: 'ok' | 'err' | 'info' }): void
 }
 
-type Tab = 'start' | 'assets' | 'subs' | 'images'
+type Tab = 'start' | 'assets' | 'search' | 'audio' | 'subs' | 'images'
+
+const RAIL: { id: Tab; label: string; title: string; icon: string }[] = [
+  { id: 'start', label: '开始', title: '快速开始与制作流程', icon: '<path d="M12 3l2.6 5.6L21 9.6l-4.6 4.3L17.8 21 12 17.6 6.2 21l1.4-7.1L3 9.6l6.4-1z"/>' },
+  { id: 'assets', label: '媒体', title: '工作区素材与手动添加', icon: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="m21 15-4.5-4.5L9 18"/>' },
+  { id: 'search', label: '搜索', title: '联网找图片/公式素材', icon: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/>' },
+  { id: 'audio', label: '音频', title: '音效库、音轨与配音', icon: '<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>' },
+  { id: 'subs', label: '字幕', title: '字幕与离线配音', icon: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 14h5M14 14h3M7 10h10"/>' },
+  { id: 'images', label: '图生', title: '首尾帧补间与参考图', icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/><circle cx="15.5" cy="8.5" r="1.5"/>' }
+]
 
 interface PickedImage { name: string; dataUrl: string; path: string }
 
@@ -129,16 +140,18 @@ export function LeftPanel({ onToast }: Props) {
     if (!base64) return
     const bytes = Uint8Array.from(atob(base64), ch => ch.charCodeAt(0))
     const safe = picked.name.replace(/[^\w.\-]+/g, '_')
-    const res = await window.gewu.writeAsset(safe, bytes)
-    if (!res.ok) { onToast({ text: res.error ?? '保存图片失败', kind: 'err' }); return }
+    // 存进 assets/（不是 previews/），返回的 path 直接写进 image.src
+    const res = await window.gewu.saveAsset(safe, bytes)
+    if (!res.ok || !res.path) { onToast({ text: res.error ?? '保存图片失败', kind: 'err' }); return }
     await refreshAssets()
     const scene = editor.state.scene
-    const size = await measureImage(safe)
+    const size = await measureImage(res.path)
     let w = size?.width ?? 640
     let h = size?.height ?? 360
     const k = Math.min(1, (scene.canvas.width * 0.6) / w, (scene.canvas.height * 0.6) / h)
     w = Math.round(w * k)
     h = Math.round(h * k)
+    const start = Number(editor.state.time.toFixed(2))
     const layer: SceneLayer = {
       id: nextLayerId(scene, 'img'),
       name: safe.replace(/\.[^.]+$/, ''),
@@ -146,9 +159,10 @@ export function LeftPanel({ onToast }: Props) {
       x: Math.round((scene.canvas.width - w) / 2),
       y: Math.round((scene.canvas.height - h) / 2),
       w, h,
-      image: { src: safe, fit: 'stretch' },
-      start: 0,
-      end: scene.canvas.duration
+      image: { src: res.path, fit: 'stretch' },
+      start,
+      end: Math.min(scene.canvas.duration, start + 5) > start + 0.2 ? Math.min(scene.canvas.duration, start + 5) : scene.canvas.duration,
+      enter: { kind: 'fade', dur: 0.4 }
     }
     editor.addLayer(layer)
     onToast({ text: '已添加图片', kind: 'ok' })
@@ -259,18 +273,28 @@ export function LeftPanel({ onToast }: Props) {
 
   return (
     <aside className="left-panel">
-      <div className="lp-tabs">
-        <button className={tab === 'start' ? 'on' : ''} onClick={() => setTab('start')}>开始</button>
-        <button className={tab === 'assets' ? 'on' : ''} onClick={() => setTab('assets')}>素材</button>
-        <button className={tab === 'subs' ? 'on' : ''} onClick={() => setTab('subs')}>
-          字幕{editor.state.scene.subtitles.length ? ` ${editor.state.scene.subtitles.length}` : ''}
-        </button>
-        <button className={tab === 'images' ? 'on' : ''} onClick={() => setTab('images')}>
-          图生视频{first && last ? ' ●' : ''}
-        </button>
-      </div>
+      <nav className="lp-rail">
+        {RAIL.map(item => (
+          <button
+            key={item.id}
+            className={`lp-rail-btn ${tab === item.id ? 'on' : ''}`}
+            onClick={() => setTab(item.id)}
+            title={item.title}
+          >
+            <svg className="lp-rail-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" dangerouslySetInnerHTML={{ __html: item.icon }} />
+            <span>{item.label}</span>
+            {item.id === 'subs' && editor.state.scene.subtitles.length > 0 && (
+              <i className="lp-rail-badge">{editor.state.scene.subtitles.length}</i>
+            )}
+            {item.id === 'audio' && editor.state.scene.audio.length > 0 && (
+              <i className="lp-rail-badge">{editor.state.scene.audio.length}</i>
+            )}
+          </button>
+        ))}
+      </nav>
 
-      <div className="lp-body">
+      <div className="lp-main">
+        <div className="lp-body">
         {tab === 'start' && (
           <>
             <div className="lp-section">
@@ -358,6 +382,14 @@ export function LeftPanel({ onToast }: Props) {
                 <button className="btn sm" onClick={() => void addImageFromPicker()}>＋ 图片</button>
               </div>
             </div>
+          </>
+        )}
+
+        {tab === 'search' && <AssetSearchPanel onToast={onToast} />}
+
+        {tab === 'audio' && (
+          <>
+            <SfxPanel onToast={onToast} />
 
             <div className="lp-section">
               <div className="lp-section-head">
@@ -365,7 +397,7 @@ export function LeftPanel({ onToast }: Props) {
                 <span className="tiny muted">导出时混进 mp4</span>
               </div>
               {editor.state.scene.audio.length === 0 && (
-                <div className="lp-empty">还没有音轨。给素材点「＋音轨」加一条，或让 agent 调 <code>asset_import</code> 后自己写进场景。</div>
+                <div className="lp-empty">还没有音轨。点上面的音效「＋」，或给媒体素材点「＋音轨」。</div>
               )}
               <div className="track-list">
                 {editor.state.scene.audio.map(t => (
@@ -561,6 +593,7 @@ export function LeftPanel({ onToast }: Props) {
             <input ref={fileRef} type="file" hidden />
           </>
         )}
+        </div>
       </div>
 
       <div className="lp-foot">
