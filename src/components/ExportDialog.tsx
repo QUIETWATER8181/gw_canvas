@@ -215,57 +215,6 @@ export function ExportDialog({ open, scene, draftName, onClose, onStart }: Props
 
           <div className="xdlg-field">
             <div className="xdlg-label-row">
-              <label>保存位置</label>
-              <div className="xdlg-label-actions">
-                <button className="link" onClick={() => void window.gewu.openFolder(dir)} disabled={!dir}>打开</button>
-                <button className="link" onClick={() => void rememberHere()} disabled={!dir}>以后都放这里</button>
-              </div>
-            </div>
-            <div className="xdlg-path">
-              <span className="mono" title={dir}>{dir || '（还没选）'}</span>
-              <button className="btn sm" onClick={() => void pickFolder()} disabled={busy}>
-                {busy ? '选择中…' : '选择文件夹…'}
-              </button>
-            </div>
-            <div className="xdlg-fullpath mono" title={joinPath(dir, name)}>{joinPath(dir, name)}</div>
-
-            {settings && settings.recentDirs.length > 0 && (
-              <div className="xdlg-recent">
-                <span className="tiny muted">最近用过</span>
-                {settings.recentDirs.slice(0, 5).map(d => (
-                  <button
-                    key={d}
-                    className={`xdlg-chip ${d === dir ? 'on' : ''}`}
-                    title={d}
-                    onClick={() => void useRecent(d)}
-                  >
-                    {d.split(/[\\/]/).filter(Boolean).pop() ?? d}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="xdlg-field">
-            <div className="xdlg-label-row">
-              <label>导出范围</label>
-              <span className="tiny muted">全片 {fmtDuration(duration)} · {scene.canvas.fps}fps · {scene.canvas.width}×{scene.canvas.height}</span>
-            </div>
-            <div className="xdlg-scope">
-              <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>整段</button>
-              <button className={scope === 'range' ? 'on' : ''} onClick={() => setScope('range')}>只导一段</button>
-              {scope === 'range' && (
-                <div className="xdlg-range">
-                  <label>起 <input className="input" type="number" min={0} max={duration} step={0.1} value={from} onChange={e => setFrom(Number(e.target.value) || 0)} /></label>
-                  <label>止 <input className="input" type="number" min={0} max={duration} step={0.1} value={to} onChange={e => setTo(Number(e.target.value) || 0)} /></label>
-                  <span className="tiny muted">秒</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="xdlg-field">
-            <div className="xdlg-label-row">
               <label>画质与帧率</label>
               <span className="tiny muted">输出 {outW}×{outH} · {fmt.fps}fps · 约 {estMB.toFixed(1)}MB</span>
             </div>
@@ -316,6 +265,57 @@ export function ExportDialog({ open, scene, draftName, onClose, onStart }: Props
                 编码器不支持这个组合时会直接报错；可以缩短导出片段，或降一档再试。
               </div>
             )}
+          </div>
+
+          <div className="xdlg-field">
+            <div className="xdlg-label-row">
+              <label>保存位置</label>
+              <div className="xdlg-label-actions">
+                <button className="link" onClick={() => void window.gewu.openFolder(dir)} disabled={!dir}>打开</button>
+                <button className="link" onClick={() => void rememberHere()} disabled={!dir}>以后都放这里</button>
+              </div>
+            </div>
+            <div className="xdlg-path">
+              <span className="mono" title={dir}>{dir || '（还没选）'}</span>
+              <button className="btn sm" onClick={() => void pickFolder()} disabled={busy}>
+                {busy ? '选择中…' : '选择文件夹…'}
+              </button>
+            </div>
+            <div className="xdlg-fullpath mono" title={joinPath(dir, name)}>{joinPath(dir, name)}</div>
+
+            {settings && settings.recentDirs.length > 0 && (
+              <div className="xdlg-recent">
+                <span className="tiny muted">最近用过</span>
+                {settings.recentDirs.slice(0, 5).map(d => (
+                  <button
+                    key={d}
+                    className={`xdlg-chip ${d === dir ? 'on' : ''}`}
+                    title={d}
+                    onClick={() => void useRecent(d)}
+                  >
+                    {d.split(/[\\/]/).filter(Boolean).pop() ?? d}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="xdlg-field">
+            <div className="xdlg-label-row">
+              <label>导出范围</label>
+              <span className="tiny muted">全片 {fmtDuration(duration)} · {scene.canvas.fps}fps · {scene.canvas.width}×{scene.canvas.height}</span>
+            </div>
+            <div className="xdlg-scope">
+              <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>整段</button>
+              <button className={scope === 'range' ? 'on' : ''} onClick={() => setScope('range')}>只导一段</button>
+              {scope === 'range' && (
+                <div className="xdlg-range">
+                  <label>起 <input className="input" type="number" min={0} max={duration} step={0.1} value={from} onChange={e => setFrom(Number(e.target.value) || 0)} /></label>
+                  <label>止 <input className="input" type="number" min={0} max={duration} step={0.1} value={to} onChange={e => setTo(Number(e.target.value) || 0)} /></label>
+                  <span className="tiny muted">秒</span>
+                </div>
+              )}
+            </div>
           </div>
 
           <label className="xdlg-check">
